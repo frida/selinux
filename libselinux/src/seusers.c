@@ -114,7 +114,10 @@ static int check_group(const char *group, const char *name, const gid_t gid) {
 	int match = 0;
 	int i, ng = 0;
 	gid_t *groups = NULL;
-	struct group gbuf, *grent = NULL;
+	struct group *grent = NULL;
+
+#ifdef HAVE_GETGRNAM_R
+	struct group gbuf;
 
 	long rbuflen = sysconf(_SC_GETGR_R_SIZE_MAX);
 	if (rbuflen <= 0)
@@ -139,6 +142,11 @@ static int check_group(const char *group, const char *name, const gid_t gid) {
 			break;
 		}
 	}
+#else
+	grent = getgrnam(group);
+	if (grent == NULL)
+		goto done;
+#endif
 
 	if (getgrouplist(name, gid, NULL, &ng) < 0) {
 		if (ng == 0)
@@ -162,7 +170,9 @@ static int check_group(const char *group, const char *name, const gid_t gid) {
 
  done:
 	free(groups);
+#ifdef HAVE_GETGRNAM_R
 	free(rbuf);
+#endif
 	return match;
 }
 

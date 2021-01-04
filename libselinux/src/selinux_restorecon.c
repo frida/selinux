@@ -6,6 +6,8 @@
  * See selinux_restorecon(3) for details.
  */
 
+#if defined (HAVE_FTS_OPEN) && defined (HAVE_STRVERSCMP)
+
 #include <unistd.h>
 #include <string.h>
 #include <stdio.h>
@@ -1357,3 +1359,43 @@ cleanup:
 	}
 	return -1;
 }
+
+#else /* defined (HAVE_FTS_OPEN) && defined (HAVE_STRVERSCMP) */
+
+#include <errno.h>
+
+#include <selinux/label.h>
+#include <selinux/restorecon.h>
+
+int selinux_restorecon(const char *pathname_orig,
+		       unsigned int restorecon_flags)
+{
+	return -1;
+}
+
+void selinux_restorecon_set_sehandle(struct selabel_handle *hndl)
+{
+}
+
+struct selabel_handle *selinux_restorecon_default_handle(void)
+{
+	return NULL;
+}
+
+void selinux_restorecon_set_exclude_list(const char **exclude_list)
+{
+}
+
+int selinux_restorecon_set_alt_rootpath(const char *alt_rootpath)
+{
+	return -1;
+}
+
+int selinux_restorecon_xattr(const char *pathname, unsigned int xattr_flags,
+			     struct dir_xattr ***xattr_list)
+{
+	errno = ENOTSUP;
+	return -1;
+}
+
+#endif

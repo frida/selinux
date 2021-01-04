@@ -599,6 +599,8 @@ static char *selabel_sub(struct selabel_sub *ptr, const char *src)
 	return NULL;
 }
 
+#if !defined(BUILD_HOST) && !defined(ANDROID)
+
 static int selabel_subs_init(const char *path, struct selabel_digest *digest,
 		       struct selabel_sub **out_subs)
 {
@@ -682,6 +684,8 @@ err:
 	}
 	goto out;
 }
+
+#endif
 
 static char *selabel_sub_key(struct saved_data *data, const char *key)
 {
