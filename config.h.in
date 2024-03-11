@@ -27,6 +27,10 @@
 /* Define to 1 if targeting PCRE2. */
 #mesondefine USE_PCRE2
 
+#ifdef USE_PCRE2
+# define PCRE2_CODE_UNIT_WIDTH 8
+#endif
+
 #ifndef HAVE___FSETLOCKING
 
 #include <stdio.h>

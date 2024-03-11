@@ -34,14 +34,19 @@ cdata.set('HAVE_STPCPY', cc.has_function('stpcpy', prefix: '#include <string.h>'
 
 cdata.set('HAVE_STRVERSCMP', cc.has_function('strverscmp', prefix: '#include <string.h>'))
 
+regex_deps = []
 regex_opt = get_option('regex')
 pcre2 = dependency('libpcre2-8', required: regex_opt, disabler: true)
 if pcre2.found()
   have_regex = true
   cdata.set('USE_PCRE2', true)
+  regex_deps += pcre2
 else
   pcre = dependency('libpcre', required: regex_opt, disabler: true)
   have_regex = pcre.found()
+  if have_regex
+    regex_deps += pcre
+  endif
 endif
 cdata.set('HAVE_REGEX', have_regex)
 

@@ -68,6 +68,7 @@ endif
 
 libselinux = library('selinux', sources,
   include_directories: libselinux_incdir,
+  dependencies: regex_deps,
   install: true,
 )
 
