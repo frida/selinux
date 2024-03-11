@@ -55,7 +55,7 @@ configure_file(
   output: 'config.h',
   configuration: cdata,
 )
-add_project_arguments('-include', 'config.h', language: 'c')
+add_project_arguments('-include', meson.current_build_dir() / 'config.h', language: 'c')
 
 subdir('libselinux')
 subdir('libsepol')

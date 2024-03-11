@@ -72,6 +72,13 @@ libselinux = library('selinux', sources,
   install: true,
 )
 
+libselinux_dep = declare_dependency(
+  include_directories: libselinux_incdir,
+  link_with: libselinux,
+)
+
+meson.override_dependency('libselinux', libselinux_dep)
+
 pkg = import('pkgconfig')
 pkg.generate(
   name: 'libselinux',

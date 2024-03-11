@@ -52,6 +52,13 @@ libsepol = library('sepol', sources,
   install: true,
 )
 
+libsepol_dep = declare_dependency(
+  include_directories: libsepol_incdir,
+  link_with: libsepol,
+)
+
+meson.override_dependency('libsepol', libsepol_dep)
+
 pkg = import('pkgconfig')
 pkg.generate(
   name: 'libsepol',
