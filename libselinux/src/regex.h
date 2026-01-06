@@ -4,10 +4,12 @@
 #include <stdbool.h>
 #include <stdio.h>
 
+#ifdef HAVE_REGEX
 #ifdef USE_PCRE2
 #include <pcre2.h>
 #else
 #include <pcre.h>
+#endif
 #endif
 
 
