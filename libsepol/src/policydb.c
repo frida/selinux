@@ -52,6 +52,7 @@
 
 #include "kernel_to_common.h"
 #include "private.h"
+#include "android_m_compat.h"
 #include "debug.h"
 #include "mls.h"
 #include "policydb_validate.h"
@@ -4048,6 +4049,7 @@ int policydb_read(policydb_t *p, struct policy_file *fp, unsigned verbose)
 	}
 
 	if (policy_type == POLICY_KERN) {
+		avtab_android_m_compat_set_vers(p->policyvers);
 		if (avtab_read(&p->te_avtab, fp))
 			goto bad;
 		if (cond_read_list(p, &p->cond_list, fp))
