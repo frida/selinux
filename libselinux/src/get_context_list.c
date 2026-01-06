@@ -7,13 +7,15 @@
 #include <string.h>
 #include <ctype.h>
 #include <pwd.h>
+
 #include "selinux_internal.h"
+#include "callbacks.h"
 #include "context_internal.h"
 #include "get_context_list_internal.h"
 
 int get_default_context_with_role(const char *user,
 				  const char *role,
-				  char * fromcon,
+				  const char *fromcon,
 				  char ** newcon)
 {
 	char **conary;
@@ -56,23 +58,24 @@ int get_default_context_with_role(const char *user,
 int get_default_context_with_rolelevel(const char *user,
 				       const char *role,
 				       const char *level,
-				       char * fromcon,
+				       const char *fromcon,
 				       char ** newcon)
 {
 
-	int rc = 0;
-	int freefrom = 0;
+	int rc;
+	char *backup_fromcon = NULL;
 	context_t con;
-	char *newfromcon;
+	const char *newfromcon;
+
 	if (!level)
 		return get_default_context_with_role(user, role, fromcon,
 						     newcon);
 
 	if (!fromcon) {
-		rc = getcon(&fromcon);
+		rc = getcon(&backup_fromcon);
 		if (rc < 0)
 			return rc;
-		freefrom = 1;
+		fromcon = backup_fromcon;
 	}
 
 	rc = -1;
@@ -91,14 +94,13 @@ int get_default_context_with_rolelevel(const char *user,
 
       out:
 	context_free(con);
-	if (freefrom)
-		freecon(fromcon);
+	freecon(backup_fromcon);
 	return rc;
 
 }
 
 int get_default_context(const char *user,
-			char * fromcon, char ** newcon)
+			const char *fromcon, char ** newcon)
 {
 	char **conary;
 	int rc;
@@ -128,7 +130,7 @@ static int is_in_reachable(char **reachable, const char *usercon_str)
 }
 
 static int get_context_user(FILE * fp,
-			     char * fromcon,
+			     context_t fromcon,
 			     const char * user,
 			     char ***reachable,
 			     unsigned int *nreachable)
@@ -143,7 +145,7 @@ static int get_context_user(FILE * fp,
 	char *linerole, *linetype;
 	char **new_reachable = NULL;
 	char *usercon_str;
-	context_t con;
+	char *usercon_str2;
 	context_t usercon;
 
 	int rc;
@@ -152,14 +154,10 @@ static int get_context_user(FILE * fp,
 
 	/* Extract the role and type of the fromcon for matching.
 	   User identity and MLS range can be variable. */
-	con = context_new(fromcon);
-	if (!con)
-		return -1;
-	fromrole = context_role_get(con);
-	fromtype = context_type_get(con);
-	fromlevel = context_range_get(con);
+	fromrole = context_role_get(fromcon);
+	fromtype = context_type_get(fromcon);
+	fromlevel = context_range_get(fromcon);
 	if (!fromrole || !fromtype) {
-		context_free(con);
 		return -1;
 	}
 
@@ -169,27 +167,27 @@ static int get_context_user(FILE * fp,
 
 		/* Skip leading whitespace. */
 		start = line;
-		while (*start && isspace(*start))
+		while (*start && isspace((unsigned char)*start))
 			start++;
 		if (!(*start))
 			continue;
 
 		/* Find the end of the (partial) fromcon in the line. */
 		end = start;
-		while (*end && !isspace(*end))
+		while (*end && !isspace((unsigned char)*end))
 			end++;
 		if (!(*end))
 			continue;
 
 		/* Check for a match. */
 		linerole = start;
-		while (*start && !isspace(*start) && *start != ':')
+		while (*start && !isspace((unsigned char)*start) && *start != ':')
 			start++;
 		if (*start != ':')
 			continue;
 		*start = 0;
 		linetype = ++start;
-		while (*start && !isspace(*start) && *start != ':')
+		while (*start && !isspace((unsigned char)*start) && *start != ':')
 			start++;
 		if (!(*start))
 			continue;
@@ -209,21 +207,21 @@ static int get_context_user(FILE * fp,
 	start = ++end;
 	while (*start) {
 		/* Skip leading whitespace */
-		while (*start && isspace(*start))
+		while (*start && isspace((unsigned char)*start))
 			start++;
 		if (!(*start))
 			break;
 
 		/* Find the end of this partial context. */
 		end = start;
-		while (*end && !isspace(*end))
+		while (*end && !isspace((unsigned char)*end))
 			end++;
 		if (*end)
 			*end++ = 0;
 
 		/* Check whether a new context is valid */
 		if (SIZE_MAX - user_len < strlen(start) + 2) {
-			fprintf(stderr, "%s: one of partial contexts is too big\n", __FUNCTION__);
+			selinux_log(SELINUX_ERROR, "%s: one of partial contexts is too big\n", __FUNCTION__);
 			errno = EINVAL;
 			rc = -1;
 			goto out;
@@ -244,7 +242,7 @@ static int get_context_user(FILE * fp,
 				rc = -1;
 				goto out;
 			}
-			fprintf(stderr,
+			selinux_log(SELINUX_ERROR,
 				"%s: can't create a context from %s, skipping\n",
 				__FUNCTION__, usercon_str);
 			free(usercon_str);
@@ -257,43 +255,41 @@ static int get_context_user(FILE * fp,
 			rc = -1;
 			goto out;
 		}
-		usercon_str = context_str(usercon);
-		if (!usercon_str) {
+		usercon_str2 = context_to_str(usercon);
+		if (!usercon_str2) {
 			context_free(usercon);
 			rc = -1;
 			goto out;
 		}
 
 		/* check whether usercon is already in reachable */
-		if (is_in_reachable(*reachable, usercon_str)) {
+		if (is_in_reachable(*reachable, usercon_str2)) {
+			free(usercon_str2);
 			context_free(usercon);
 			start = end;
 			continue;
 		}
-		if (security_check_context(usercon_str) == 0) {
-			new_reachable = realloc(*reachable, (*nreachable + 2) * sizeof(char *));
+		if (security_check_context(usercon_str2) == 0) {
+			new_reachable = reallocarray(*reachable, *nreachable + 2, sizeof(char *));
 			if (!new_reachable) {
+				free(usercon_str2);
 				context_free(usercon);
 				rc = -1;
 				goto out;
 			}
 			*reachable = new_reachable;
-			new_reachable[*nreachable] = strdup(usercon_str);
-			if (new_reachable[*nreachable] == NULL) {
-				context_free(usercon);
-				rc = -1;
-				goto out;
-			}
+			new_reachable[*nreachable] = usercon_str2;
+			usercon_str2 = NULL;
 			new_reachable[*nreachable + 1] = 0;
 			*nreachable += 1;
 		}
+		free(usercon_str2);
 		context_free(usercon);
 		start = end;
 	}
 	rc = 0;
 
       out:
-	context_free(con);
 	free(line);
 	return rc;
 }
@@ -345,22 +341,22 @@ static int get_failsafe_context(const char *user, char ** newcon)
 
 int get_ordered_context_list_with_level(const char *user,
 					const char *level,
-					char * fromcon,
+					const char *fromcon,
 					char *** list)
 {
 	int rc;
-	int freefrom = 0;
+	char *backup_fromcon = NULL;
 	context_t con;
-	char *newfromcon;
+	const char *newfromcon;
 
 	if (!level)
 		return get_ordered_context_list(user, fromcon, list);
 
 	if (!fromcon) {
-		rc = getcon(&fromcon);
+		rc = getcon(&backup_fromcon);
 		if (rc < 0)
 			return rc;
-		freefrom = 1;
+		fromcon = backup_fromcon;
 	}
 
 	rc = -1;
@@ -379,15 +375,14 @@ int get_ordered_context_list_with_level(const char *user,
 
       out:
 	context_free(con);
-	if (freefrom)
-		freecon(fromcon);
+	freecon(backup_fromcon);
 	return rc;
 }
 
 
 int get_default_context_with_level(const char *user,
 				   const char *level,
-				   char * fromcon,
+				   const char *fromcon,
 				   char ** newcon)
 {
 	char **conary;
@@ -405,24 +400,30 @@ int get_default_context_with_level(const char *user,
 }
 
 int get_ordered_context_list(const char *user,
-			     char * fromcon,
+			     const char *fromcon,
 			     char *** list)
 {
 	char **reachable = NULL;
 	int rc = 0;
-	unsigned nreachable = 0, freefrom = 0;
+	unsigned nreachable = 0;
+	char *backup_fromcon = NULL;
 	FILE *fp;
 	char *fname = NULL;
 	size_t fname_len;
 	const char *user_contexts_path = selinux_user_contexts_path();
+	context_t con = NULL;
 
 	if (!fromcon) {
 		/* Get the current context and use it for the starting context */
-		rc = getcon(&fromcon);
+		rc = getcon(&backup_fromcon);
 		if (rc < 0)
 			return rc;
-		freefrom = 1;
+		fromcon = backup_fromcon;
 	}
+
+	con = context_new(fromcon);
+	if (!con)
+		goto failsafe;
 
 	/* Determine the ordering to apply from the optional per-user config
 	   and from the global config. */
@@ -434,11 +435,11 @@ int get_ordered_context_list(const char *user,
 	fp = fopen(fname, "re");
 	if (fp) {
 		__fsetlocking(fp, FSETLOCKING_BYCALLER);
-		rc = get_context_user(fp, fromcon, user, &reachable, &nreachable);
+		rc = get_context_user(fp, con, user, &reachable, &nreachable);
 
-		fclose(fp);
+		fclose_errno_safe(fp);
 		if (rc < 0 && errno != ENOENT) {
-			fprintf(stderr,
+			selinux_log(SELINUX_ERROR,
 				"%s:  error in processing configuration file %s\n",
 				__FUNCTION__, fname);
 			/* Fall through, try global config */
@@ -448,10 +449,10 @@ int get_ordered_context_list(const char *user,
 	fp = fopen(selinux_default_context_path(), "re");
 	if (fp) {
 		__fsetlocking(fp, FSETLOCKING_BYCALLER);
-		rc = get_context_user(fp, fromcon, user, &reachable, &nreachable);
-		fclose(fp);
+		rc = get_context_user(fp, con, user, &reachable, &nreachable);
+		fclose_errno_safe(fp);
 		if (rc < 0 && errno != ENOENT) {
-			fprintf(stderr,
+			selinux_log(SELINUX_ERROR,
 				"%s:  error in processing configuration file %s\n",
 				__FUNCTION__, selinux_default_context_path());
 			/* Fall through */
@@ -469,8 +470,8 @@ int get_ordered_context_list(const char *user,
 	else
 		freeconary(reachable);
 
-	if (freefrom)
-		freecon(fromcon);
+	context_free(con);
+	freecon(backup_fromcon);
 
 	return rc;
 
@@ -479,12 +480,11 @@ int get_ordered_context_list(const char *user,
 	   the "failsafe" context to at least permit root login
 	   for emergency recovery if possible. */
 	freeconary(reachable);
-	reachable = malloc(2 * sizeof(char *));
+	reachable = calloc(2, sizeof(char *));
 	if (!reachable) {
 		rc = -1;
 		goto out;
 	}
-	reachable[0] = reachable[1] = 0;
 	rc = get_failsafe_context(user, &reachable[0]);
 	if (rc < 0) {
 		freeconary(reachable);

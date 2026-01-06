@@ -1,6 +1,6 @@
 
 /* 
- * Author : Stephen Smalley, <sds@tycho.nsa.gov>
+ * Author : Stephen Smalley, <stephen.smalley.work@gmail.com>
  */
 
 /* Updated: David Caplan, <dac@tresys.com>
@@ -22,6 +22,7 @@
 
 %{
 #include <sys/types.h>
+#include <ctype.h>
 #include <limits.h>
 #include <stdint.h>
 #include <string.h>
@@ -40,7 +41,23 @@ int werror = 0;
 int yyerror(const char *msg);
 int yywarn(const char *msg);
 
+#ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
+/*
+ * Version that does not exit, like yy_fatal_error(),
+ * since fuzz targets must not call exit().
+ */
+#include <setjmp.h>
+extern jmp_buf fuzzing_pre_parse_stack_state;
+void yyfatal(const char *msg)
+{
+	yyerror(msg);
+	longjmp(fuzzing_pre_parse_stack_state, 1);
+}
+#define YY_FATAL_ERROR(msg) yyfatal(msg)
+#endif
+
 void set_source_file(const char *name);
+static void set_source_line_and_file(const char *line);
 
 char source_file[PATH_MAX];
 unsigned long source_lineno = 1;
@@ -59,14 +76,24 @@ alnum   [a-zA-Z0-9]
 hexval	[0-9A-Fa-f]
 
 %%
-\n.*				{ strncpy(linebuf[lno], yytext+1, 255);
-                                  linebuf[lno][254] = 0;
-                                  lno = 1 - lno; 
-                                  policydb_lineno++;
-				  source_lineno++;
-                                  yyless(1); }
-CLONE |
-clone				{ return(CLONE); }
+\n.*				{
+#if defined(__GNUC__) && __GNUC__ >= 8
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wstringop-truncation"
+#endif
+				  strncpy(linebuf[lno], yytext+1, 255);
+#if defined(__GNUC__) && __GNUC__ >= 8
+#pragma GCC diagnostic pop
+#endif
+				  linebuf[lno][254] = 0;
+				  lno = 1 - lno;
+				  policydb_lineno++;
+				  if (source_lineno == ULONG_MAX)
+				      yywarn("source line number overflow");
+				  else
+				      source_lineno++;
+				  yyless(1);
+				}
 COMMON |
 common				{ return(COMMON); }
 CLASS |
@@ -244,6 +271,8 @@ policycap |
 POLICYCAP			{ return(POLICYCAP); }
 permissive |
 PERMISSIVE			{ return(PERMISSIVE); }
+neveraudit |
+NEVERAUDIT			{ return(NEVERAUDIT); }
 default_user |
 DEFAULT_USER			{ return(DEFAULT_USER); }
 default_role |
@@ -266,11 +295,20 @@ GLBLUB				{ return(GLBLUB); }
 {letter}({alnum}|[_\-])*([\.]?({alnum}|[_\-]))*	{ return(IDENTIFIER); }
 {digit}+|0x{hexval}+            { return(NUMBER); }
 {alnum}*{letter}{alnum}*        { return(FILESYSTEM); }
+{digit}{1,3}(\.{digit}{1,3}){3}"/"{digit}{1,2}	{ return(IPV4_CIDR); }
 {digit}{1,3}(\.{digit}{1,3}){3}    { return(IPV4_ADDR); }
 {hexval}{0,4}":"{hexval}{0,4}":"({hexval}|[:.])*  { return(IPV6_ADDR); }
+{hexval}{0,4}":"{hexval}{0,4}":"({hexval}|[:.])*"/"{digit}{1,3}	{ return(IPV6_CIDR); }
 {digit}+(\.({alnum}|[_.])*)?    { return(VERSION_IDENTIFIER); }
-#line[ ]1[ ]\"[^\n]*\"		{ set_source_file(yytext+9); }
-#line[ ]{digit}+	        { source_lineno = atoi(yytext+6)-1; }
+({alnum}({alnum}|[\*\?_]){0,15}|[\*\?]({alnum}|[\*\?_]){1,15})	{ return(NETIFNAME); }
+#line[ ]{digit}+[ ]\"[^\n]*\"	{ set_source_line_and_file(yytext+6); }
+#line[ ]{digit}+	        {
+				  errno = 0;
+				  source_lineno = strtoul(yytext+6, NULL, 10) - 1;
+				  if (errno) {
+				    yywarn("source line number too big");
+				  }
+				}
 #[^\n]*                         { /* delete comments */ }
 [ \t\f]+			{ /* delete whitespace */ }
 "==" 				{ return(EQUALS); }
@@ -292,20 +330,42 @@ GLBLUB				{ return(GLBLUB); }
 "]" |
 "~" |
 "*"				{ return(yytext[0]); } 
-.                               { yyerror("unrecognized character");}
+.                               { yyerror("unrecognized character");
+/* Available since bison 3.6, avoids duplicate error message */
+#ifdef YYerror
+				  return YYerror;
+#else
+				  return INVALID_CHAR;
+#endif
+				}
 %%
 int yyerror(const char *msg)
 {
+#ifndef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
+	const char *token;
+	char buf[8];
+
+	if (isprint((unsigned char)yytext[0])) {
+		token = yytext;
+	} else {
+		snprintf(buf, sizeof(buf), "%#x", yytext[0]);
+		token = buf;
+	}
+
 	if (source_file[0])
-		fprintf(stderr, "%s:%ld:",
+		fprintf(stderr, "%s:%lu:",
 			source_file, source_lineno);
 	else
 		fprintf(stderr, "(unknown source)::");
-	fprintf(stderr, "ERROR '%s' at token '%s' on line %ld:\n%s\n%s\n",
+	fprintf(stderr, "ERROR '%s' at token '%s' on line %lu:\n%s\n%s\n",
 			msg,
-			yytext,
+			token,
 			policydb_lineno,
 			linebuf[0], linebuf[1]);
+#else
+	(void)msg;
+#endif
+
 	policydb_errors++;
 	return -1;
 }
@@ -315,16 +375,19 @@ int yywarn(const char *msg)
 	if (werror)
 		return yyerror(msg);
 
+#ifndef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
 	if (source_file[0])
-		fprintf(stderr, "%s:%ld:",
+		fprintf(stderr, "%s:%lu:",
 			source_file, source_lineno);
 	else
 		fprintf(stderr, "(unknown source)::");
-	fprintf(stderr, "WARNING '%s' at token '%s' on line %ld:\n%s\n%s\n",
+	fprintf(stderr, "WARNING '%s' at token '%s' on line %lu:\n%s\n%s\n",
 			msg,
 			yytext,
 			policydb_lineno,
 			linebuf[0], linebuf[1]);
+#endif
+
 	return 0;
 }
 
@@ -335,4 +398,22 @@ void set_source_file(const char *name)
 	source_file[sizeof(source_file)-1] = '\0';
 	if (strlen(source_file) && source_file[strlen(source_file)-1] == '"')
 		source_file[strlen(source_file)-1] = '\0';
+}
+
+void set_source_line_and_file(const char *line)
+{
+	char *name;
+	unsigned long lineno;
+	errno = 0;
+	lineno = strtoul(line, &name, 10) - 1;
+	if (errno) {
+		yywarn("source line number too big");
+	}
+	set_source_file(name + 2 /* skip a space and a quote */ );
+
+	/*
+	 * set_source_file sets source_lineno to 1.
+	 * Assign source_lineno after calling set_source_file.
+	 */
+	source_lineno = lineno;
 }

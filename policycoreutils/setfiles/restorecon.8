@@ -11,6 +11,7 @@ restorecon \- restore file(s) default SELinux security contexts.
 .RB [ \-v ]
 .RB [ \-i ]
 .RB [ \-F ]
+.RB [ \-U ]
 .RB [ \-W ]
 .RB [ \-I | \-D ]
 .RB [ \-x ]
@@ -30,9 +31,12 @@ restorecon \- restore file(s) default SELinux security contexts.
 .RB [ \-v ]
 .RB [ \-i ]
 .RB [ \-F ]
+.RB [ \-U ]
 .RB [ \-W ]
 .RB [ \-I | \-D ]
 .RB [ \-x ]
+.RB [ \-T
+.IR nthreads ]
 
 .SH "DESCRIPTION"
 This manual page describes the
@@ -58,7 +62,9 @@ context,
 will only modify the type portion of the security context.
 The
 .B \-F
-option will force a replacement of the entire context.
+and
+.B \-U
+options will force a replacement of the entire context.
 .P
 If a file is labeled with
 .BR customizable
@@ -85,6 +91,10 @@ for
 .B \-F
 Force reset of context to match file_context for customizable files, and the
 default file context, changing the user, role, range portion as well as the type.
+.TP
+.B \-U
+In addition to the type portion also change the user and role portions, but
+not the range portion.
 .TP
 .B \-h, \-?
 display usage information and exit.
@@ -160,6 +170,13 @@ prevent
 .B restorecon
 from crossing file system boundaries.
 .TP
+.BI \-T \ nthreads
+use up to
+.I nthreads
+threads.  Specify 0 to create as many threads as there are available
+CPU cores; 1 to use only a single thread (default); or any positive
+number to use the given number of threads (if possible).
+.TP
 .SH "ARGUMENTS"
 .IR pathname \ ...
 The pathname for the file(s) to be relabeled.
@@ -214,6 +231,15 @@ and provided the
 .B \-n
 option is NOT set and recursive mode is set, files will be relabeled as
 required with the digests then being updated provided there are no errors.
+
+.SH EXAMPLE
+.nf
+Fix labeling of /var/www/ including all sub-directories and list all context changes
+# restorecon -rv /var/www/
+List mislabeled files in user home directory and what the correct label should be
+# restorecon -nvr ~
+Fix labeling of files listed in file_list file, ignoring any that do not exist
+# restorecon -vif file_list
 
 .SH "AUTHOR"
 This man page was written by Dan Walsh <dwalsh@redhat.com>.

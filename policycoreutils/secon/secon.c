@@ -333,6 +333,9 @@ static void cmd_line(int argc, char *argv[])
 		opts->from_type = OPTS_FROM_CUR;
 
 	if (opts->from_type == OPTS_FROM_ARG) {
+		if (!argv[0])
+			errx(EXIT_FAILURE, "No argument given");
+
 		opts->f.arg = argv[0];
 
 		if (xstreq(argv[0], "-"))
@@ -683,7 +686,7 @@ static void disp_con(const char *scon_raw)
 		color.range_bg = strtok(NULL, " ");
 
 		color.valid = 1;
-	};
+	}
 
 	if (!(con = context_new(scon)))
 		errx(EXIT_FAILURE, "Couldn't create context from: %s", scon);

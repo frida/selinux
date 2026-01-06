@@ -35,7 +35,7 @@
 #include "cil_log.h"
 #include "cil_mem.h"
 
-__attribute__((noreturn)) __attribute__((format (printf, 1, 2))) void cil_list_error(const char* msg, ...)
+__attribute__((noreturn)) __attribute__((format (printf, 1, 2))) static void cil_list_error(const char* msg, ...)
 {
 	va_list ap;
 	va_start(ap, msg);
@@ -55,15 +55,16 @@ void cil_list_init(struct cil_list **list, enum cil_flavor flavor)
 
 void cil_list_destroy(struct cil_list **list, unsigned destroy_data)
 {
+	struct cil_list_item *item;
+
 	if (*list == NULL) {
 		return;
 	}
 
-	struct cil_list_item *item = (*list)->head;
-	struct cil_list_item *next = NULL;
+	item = (*list)->head;
 	while (item != NULL)
 	{
-		next = item->next;
+		struct cil_list_item *next = item->next;
 		if (item->flavor == CIL_LIST) {
 			cil_list_destroy((struct cil_list**)&(item->data), destroy_data);
 			free(item);

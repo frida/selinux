@@ -31,7 +31,7 @@
  * For example:
  * ----------------------------------------
  * #
- * # It is an example specfile for database obejcts
+ * # It is an example specfile for database objects
  * #
  * db_database  template1           system_u:object_r:sepgsql_db_t:s0
  *
@@ -178,11 +178,15 @@ db_close(struct selabel_handle *rec)
 	spec_t	       *spec;
 	unsigned int	i;
 
+	if (!catalog)
+		return;
+
 	for (i = 0; i < catalog->nspec; i++) {
 		spec = &catalog->specs[i];
 		free(spec->key);
 		free(spec->lr.ctx_raw);
 		free(spec->lr.ctx_trans);
+		__pthread_mutex_destroy(&spec->lr.lock);
 	}
 	free(catalog);
 }
@@ -263,11 +267,20 @@ db_init(const struct selinux_opt *opts, unsigned nopts,
 	 *   the default one. If RDBMS is not SE-PostgreSQL, it may need to
 	 *   specify an explicit specfile for database objects.
 	 */
-	while (nopts--) {
+	while (nopts) {
+		nopts--;
 		switch (opts[nopts].type) {
 		case SELABEL_OPT_PATH:
 			path = opts[nopts].value;
 			break;
+		case SELABEL_OPT_UNUSED:
+		case SELABEL_OPT_VALIDATE:
+		case SELABEL_OPT_DIGEST:
+			break;
+		default:
+			free(catalog);
+			errno = EINVAL;
+			return NULL;
 		}
 	}
 
@@ -277,7 +290,7 @@ db_init(const struct selinux_opt *opts, unsigned nopts,
 	if (!path)
 		path = selinux_sepgsql_context_path();
 
-	if ((filp = fopen(path, "rb")) == NULL) {
+	if ((filp = fopen(path, "re")) == NULL) {
 		free(catalog);
 		return NULL;
 	}
@@ -293,6 +306,11 @@ db_init(const struct selinux_opt *opts, unsigned nopts,
 		return NULL;
 	}
 	rec->spec_file = strdup(path);
+	if (!rec->spec_file) {
+                free(catalog);
+                fclose(filp);
+                return NULL;
+	}
 
 	/*
 	 * Parse for each lines
@@ -322,24 +340,26 @@ db_init(const struct selinux_opt *opts, unsigned nopts,
 		if (process_line(path, line_buf, ++line_num, catalog) < 0)
 			goto out_error;
 	}
-	free(line_buf);
 
 	if (digest_add_specfile(rec->digest, filp, NULL, sb.st_size, path) < 0)
 		goto out_error;
 
 	digest_gen_hash(rec->digest);
 
+	free(line_buf);
 	fclose(filp);
 
 	return catalog;
 
 out_error:
+	free(line_buf);
 	for (i = 0; i < catalog->nspec; i++) {
 		spec_t	       *spec = &catalog->specs[i];
 
 		free(spec->key);
 		free(spec->lr.ctx_raw);
 		free(spec->lr.ctx_trans);
+		__pthread_mutex_destroy(&spec->lr.lock);
 	}
 	free(catalog);
 	fclose(filp);

@@ -1,5 +1,5 @@
 
-/* Author : Stephen Smalley, <sds@tycho.nsa.gov> */
+/* Author : Stephen Smalley, <stephen.smalley.work@gmail.com> */
 
 /*
  * Updated: Trusted Computer Solutions, Inc. <dgoeddel@trustedcs.com>
@@ -44,7 +44,6 @@
 #include "debug.h"
 #include "private.h"
 #include "mls.h"
-#include "android_m_compat.h"
 
 #define glblub_version ((p->policy_type == POLICY_KERN && \
 		     p->policyvers >= POLICYDB_VERSION_GLBLUB) || \
@@ -57,7 +56,8 @@ struct policy_data {
 };
 
 static int avrule_write_list(policydb_t *p,
-			     avrule_t * avrules, struct policy_file *fp);
+			     avrule_t * avrules, struct policy_file *fp,
+			     unsigned conditional);
 
 static int ebitmap_write(ebitmap_t * e, struct policy_file *fp)
 {
@@ -105,7 +105,8 @@ static uint16_t spec_order[] = {
 
 static int avtab_write_item(policydb_t * p,
 			    avtab_ptr_t cur, struct policy_file *fp,
-			    unsigned merge, unsigned commit, uint32_t * nel)
+			    unsigned merge, unsigned commit, unsigned conditional,
+			    uint32_t * nel)
 {
 	avtab_ptr_t node;
 	uint8_t buf8;
@@ -224,36 +225,36 @@ static int avtab_write_item(policydb_t * p,
 	buf16[0] = cpu_to_le16(cur->key.source_type);
 	buf16[1] = cpu_to_le16(cur->key.target_type);
 	buf16[2] = cpu_to_le16(cur->key.target_class);
-	if (avtab_android_m_compat && (cur->key.specified & AVTAB_XPERMS) &&
-		    (cur->datum.xperms->specified == AVTAB_XPERMS_IOCTLDRIVER))
-		buf16[3] = cpu_to_le16(avtab_xperms_to_optype(cur->key.specified));
-	else
-		buf16[3] = cpu_to_le16(cur->key.specified);
+	buf16[3] = cpu_to_le16(cur->key.specified);
 	items = put_entry(buf16, sizeof(uint16_t), 4, fp);
 	if (items != 4)
 		return POLICYDB_ERROR;
 	if ((p->policyvers < POLICYDB_VERSION_XPERMS_IOCTL) &&
 			(cur->key.specified & AVTAB_XPERMS)) {
-		ERR(fp->handle, "policy version %u does not support ioctl extended"
+		ERR(fp->handle, "policy version %u does not support extended "
 				"permissions rules and one was specified", p->policyvers);
+		return POLICYDB_ERROR;
+	}
+
+	if (!policydb_has_cond_xperms_feature(p) && (cur->key.specified & AVTAB_XPERMS) && conditional) {
+		ERR(fp->handle, "policy version %u does not support extended "
+				"permissions rules in conditional policies and one was specified", p->policyvers);
 		return POLICYDB_ERROR;
 	}
 
 	if (p->target_platform != SEPOL_TARGET_SELINUX &&
 			(cur->key.specified & AVTAB_XPERMS)) {
-		ERR(fp->handle, "Target platform %s does not support ioctl "
+		ERR(fp->handle, "Target platform %s does not support "
 				"extended permissions rules and one was specified",
 				policydb_target_strings[p->target_platform]);
 		return POLICYDB_ERROR;
 	}
 
 	if (cur->key.specified & AVTAB_XPERMS) {
-		if (avtab_android_m_compat == 0) {
-			buf8 = cur->datum.xperms->specified;
-			items = put_entry(&buf8, sizeof(uint8_t),1,fp);
-			if (items != 1)
-				return POLICYDB_ERROR;
-		}
+		buf8 = cur->datum.xperms->specified;
+		items = put_entry(&buf8, sizeof(uint8_t),1,fp);
+		if (items != 1)
+			return POLICYDB_ERROR;
 		buf8 = cur->datum.xperms->driver;
 		items = put_entry(&buf8, sizeof(uint8_t),1,fp);
 		if (items != 1)
@@ -320,7 +321,7 @@ static int avtab_write(struct policydb *p, avtab_t * a, struct policy_file *fp)
 		for (cur = a->htable[i]; cur; cur = cur->next) {
 			/* If old format, compute final nel.
 			   If new format, write out the items. */
-			if (avtab_write_item(p, cur, fp, 1, !oldvers, &nel)) {
+			if (avtab_write_item(p, cur, fp, 1, !oldvers, 0, &nel)) {
 				rc = -1;
 				goto out;
 			}
@@ -339,7 +340,7 @@ static int avtab_write(struct policydb *p, avtab_t * a, struct policy_file *fp)
 		avtab_reset_merged(a);
 		for (i = 0; i < a->nslot; i++) {
 			for (cur = a->htable[i]; cur; cur = cur->next) {
-				if (avtab_write_item(p, cur, fp, 1, 1, NULL)) {
+				if (avtab_write_item(p, cur, fp, 1, 1, 0, NULL)) {
 					rc = -1;
 					goto out;
 				}
@@ -802,7 +803,7 @@ static int cond_write_av_list(policydb_t * p,
 
 	for (cur_list = list; cur_list != NULL; cur_list = cur_list->next) {
 		if (cur_list->node->parse_context)
-			if (avtab_write_item(p, cur_list->node, fp, 0, 1, NULL))
+			if (avtab_write_item(p, cur_list->node, fp, 0, 1, 1, NULL))
 				goto out;
 	}
 
@@ -841,7 +842,7 @@ static int cond_write_node(policydb_t * p,
 	for (cur_expr = node->expr; cur_expr != NULL; cur_expr = cur_expr->next) {
 		items = 0;
 		buf[items++] = cpu_to_le32(cur_expr->expr_type);
-		buf[items++] = cpu_to_le32(cur_expr->bool);
+		buf[items++] = cpu_to_le32(cur_expr->boolean);
 		items2 = put_entry(buf, sizeof(uint32_t), items, fp);
 		if (items2 != items)
 			return POLICYDB_ERROR;
@@ -853,9 +854,9 @@ static int cond_write_node(policydb_t * p,
 		if (cond_write_av_list(p, node->false_list, fp) != 0)
 			return POLICYDB_ERROR;
 	} else {
-		if (avrule_write_list(p, node->avtrue_list, fp))
+		if (avrule_write_list(p, node->avtrue_list, fp, 1))
 			return POLICYDB_ERROR;
-		if (avrule_write_list(p, node->avfalse_list, fp))
+		if (avrule_write_list(p, node->avfalse_list, fp, 1))
 			return POLICYDB_ERROR;
 	}
 
@@ -1104,16 +1105,20 @@ static int class_write(hashtab_key_t key, hashtab_datum_t datum, void *ptr)
 	     p->policyvers >= POLICYDB_VERSION_NEW_OBJECT_DEFAULTS) ||
 	    (p->policy_type == POLICY_BASE &&
 	     p->policyvers >= MOD_POLICYDB_VERSION_NEW_OBJECT_DEFAULTS)) {
+		char default_range = cladatum->default_range;
+
 		buf[0] = cpu_to_le32(cladatum->default_user);
 		buf[1] = cpu_to_le32(cladatum->default_role);
-		if (!glblub_version && cladatum->default_range == DEFAULT_GLBLUB) {
+		if (!glblub_version && default_range == DEFAULT_GLBLUB) {
 			WARN(fp->handle,
-                             "class %s default_range set to GLBLUB but policy version is %d (%d required), discarding",
-                             p->p_class_val_to_name[cladatum->s.value - 1], p->policyvers,
-                             p->policy_type == POLICY_KERN? POLICYDB_VERSION_GLBLUB:MOD_POLICYDB_VERSION_GLBLUB);
-                        cladatum->default_range = 0;
-                }
-		buf[2] = cpu_to_le32(cladatum->default_range);
+			     "class %s default_range set to GLBLUB but %spolicy version is %d (%d required), discarding",
+			     p->p_class_val_to_name[cladatum->s.value - 1],
+			     p->policy_type == POLICY_KERN ? "" : "module ",
+			     p->policyvers,
+			     p->policy_type == POLICY_KERN? POLICYDB_VERSION_GLBLUB:MOD_POLICYDB_VERSION_GLBLUB);
+			default_range = 0;
+		}
+		buf[2] = cpu_to_le32(default_range);
 		items = put_entry(buf, sizeof(uint32_t), 3, fp);
 		if (items != 3)
 			return POLICYDB_ERROR;
@@ -1235,6 +1240,16 @@ static int type_write(hashtab_key_t key, hashtab_datum_t datum, void *ptr)
 	items = 0;
 	buf[items++] = cpu_to_le32(len);
 	buf[items++] = cpu_to_le32(typdatum->s.value);
+
+
+	if (p->policy_type != POLICY_KERN
+	    && p->policyvers < MOD_POLICYDB_VERSION_NEVERAUDIT
+	    && typdatum->flags & TYPE_FLAGS_NEVERAUDIT)
+		WARN(fp->handle, "Warning! Module policy "
+			"version %d cannot support neveraudit "
+			"types, but one was defined",
+			p->policyvers);
+
 	if (policydb_has_boundary_feature(p)) {
 		uint32_t properties = 0;
 
@@ -1256,6 +1271,11 @@ static int type_write(hashtab_key_t key, hashtab_datum_t datum, void *ptr)
 		    && p->policy_type != POLICY_KERN)
 			properties |= TYPEDATUM_PROPERTY_PERMISSIVE;
 
+		if (typdatum->flags & TYPE_FLAGS_NEVERAUDIT
+		    && p->policy_type != POLICY_KERN
+		    && p->policyvers >= MOD_POLICYDB_VERSION_NEVERAUDIT)
+			properties |= TYPEDATUM_PROPERTY_NEVERAUDIT;
+
 		buf[items++] = cpu_to_le32(properties);
 		buf[items++] = cpu_to_le32(typdatum->bounds);
 	} else {
@@ -1265,7 +1285,7 @@ static int type_write(hashtab_key_t key, hashtab_datum_t datum, void *ptr)
 			buf[items++] = cpu_to_le32(typdatum->flavor);
 
 			if (p->policyvers >= MOD_POLICYDB_VERSION_PERMISSIVE)
-				buf[items++] = cpu_to_le32(typdatum->flags);
+				buf[items++] = cpu_to_le32(typdatum->flags & ~TYPE_FLAGS_NEVERAUDIT);
 			else if (typdatum->flags & TYPE_FLAGS_PERMISSIVE)
 				WARN(fp->handle, "Warning! Module policy "
 				     "version %d cannot support permissive "
@@ -1347,12 +1367,12 @@ static int user_write(hashtab_key_t key, hashtab_datum_t datum, void *ptr)
 	return POLICYDB_SUCCESS;
 }
 
-static int (*write_f[SYM_NUM]) (hashtab_key_t key, hashtab_datum_t datum,
+static int (*const write_f[SYM_NUM]) (hashtab_key_t key, hashtab_datum_t datum,
 				void *datap) = {
 common_write, class_write, role_write, type_write, user_write,
 	    cond_write_bool, sens_write, cat_write,};
 
-static int ocontext_write_xen(struct policydb_compat_info *info, policydb_t *p,
+static int ocontext_write_xen(const struct policydb_compat_info *info, policydb_t *p,
 			  struct policy_file *fp)
 {
 	unsigned int i, j;
@@ -1460,7 +1480,7 @@ static int ocontext_write_xen(struct policydb_compat_info *info, policydb_t *p,
 	return POLICYDB_SUCCESS;
 }
 
-static int ocontext_write_selinux(struct policydb_compat_info *info,
+static int ocontext_write_selinux(const struct policydb_compat_info *info,
 	policydb_t *p, struct policy_file *fp)
 {
 	unsigned int i, j;
@@ -1590,7 +1610,7 @@ static int ocontext_write_selinux(struct policydb_compat_info *info,
 	return POLICYDB_SUCCESS;
 }
 
-static int ocontext_write(struct policydb_compat_info *info, policydb_t * p,
+static int ocontext_write(const struct policydb_compat_info *info, policydb_t * p,
 	struct policy_file *fp)
 {
 	int rc = POLICYDB_ERROR;
@@ -1746,11 +1766,19 @@ static int range_write(policydb_t * p, struct policy_file *fp)
 /************** module writing functions below **************/
 
 static int avrule_write(policydb_t *p, avrule_t * avrule,
-			struct policy_file *fp)
+			struct policy_file *fp, unsigned conditional)
 {
 	size_t items, items2;
 	uint32_t buf[32], len;
 	class_perm_node_t *cur;
+
+	if (p->policyvers < MOD_POLICYDB_VERSION_SELF_TYPETRANS &&
+	    (avrule->specified & AVRULE_TYPE) &&
+	    (avrule->flags & RULE_SELF)) {
+		ERR(fp->handle,
+		    "Module contains a self rule not supported by the target module policy version");
+		return POLICYDB_ERROR;
+	}
 
 	items = 0;
 	buf[items++] = cpu_to_le32(avrule->specified);
@@ -1796,15 +1824,23 @@ static int avrule_write(policydb_t *p, avrule_t * avrule,
 
 		if (p->policyvers < MOD_POLICYDB_VERSION_XPERMS_IOCTL) {
 			ERR(fp->handle,
-			    "module policy version %u does not support ioctl"
+			    "module policy version %u does not support"
 			    " extended permissions rules and one was specified",
+			    p->policyvers);
+			return POLICYDB_ERROR;
+		}
+
+		if (conditional && !policydb_has_cond_xperms_feature(p)) {
+			ERR(fp->handle,
+			    "module policy version %u does not support"
+			    " extended permissions rules in conditional policies and one was specified",
 			    p->policyvers);
 			return POLICYDB_ERROR;
 		}
 
 		if (p->target_platform != SEPOL_TARGET_SELINUX) {
 			ERR(fp->handle,
-			    "Target platform %s does not support ioctl"
+			    "Target platform %s does not support"
 			    " extended permissions rules and one was specified",
 			    policydb_target_strings[p->target_platform]);
 			return POLICYDB_ERROR;
@@ -1829,7 +1865,7 @@ static int avrule_write(policydb_t *p, avrule_t * avrule,
 }
 
 static int avrule_write_list(policydb_t *p, avrule_t * avrules,
-			     struct policy_file *fp)
+			     struct policy_file *fp, unsigned conditional)
 {
 	uint32_t buf[32], len;
 	avrule_t *avrule;
@@ -1847,7 +1883,7 @@ static int avrule_write_list(policydb_t *p, avrule_t * avrules,
 
 	avrule = avrules;
 	while (avrule) {
-		if (avrule_write(p, avrule, fp))
+		if (avrule_write(p, avrule, fp, conditional))
 			return POLICYDB_ERROR;
 		avrule = avrule->next;
 	}
@@ -1936,11 +1972,12 @@ static int role_allow_rule_write(role_allow_rule_t * r, struct policy_file *fp)
 	return POLICYDB_SUCCESS;
 }
 
-static int filename_trans_rule_write(filename_trans_rule_t * t, struct policy_file *fp)
+static int filename_trans_rule_write(policydb_t *p, filename_trans_rule_t *t,
+				     struct policy_file *fp)
 {
 	int nel = 0;
-	size_t items;
-	uint32_t buf[2], len;
+	size_t items, entries;
+	uint32_t buf[3], len;
 	filename_trans_rule_t *ftr;
 
 	for (ftr = t; ftr; ftr = ftr->next)
@@ -1969,9 +2006,20 @@ static int filename_trans_rule_write(filename_trans_rule_t * t, struct policy_fi
 
 		buf[0] = cpu_to_le32(ftr->tclass);
 		buf[1] = cpu_to_le32(ftr->otype);
+		buf[2] = cpu_to_le32(ftr->flags);
 
-		items = put_entry(buf, sizeof(uint32_t), 2, fp);
-		if (items != 2)
+		if (p->policyvers >= MOD_POLICYDB_VERSION_SELF_TYPETRANS) {
+			entries = 3;
+		} else if (!(ftr->flags & RULE_SELF)) {
+			entries = 2;
+		} else {
+			ERR(fp->handle,
+			    "Module contains a self rule not supported by the target module policy version");
+			return POLICYDB_ERROR;
+		}
+
+		items = put_entry(buf, sizeof(uint32_t), entries, fp);
+		if (items != entries)
 			return POLICYDB_ERROR;
 	}
 	return POLICYDB_SUCCESS;
@@ -2039,14 +2087,14 @@ static int avrule_decl_write(avrule_decl_t * decl, int num_scope_syms,
 		return POLICYDB_ERROR;
 	}
 	if (cond_write_list(p, decl->cond_list, fp) == -1 ||
-	    avrule_write_list(p, decl->avrules, fp) == -1 ||
+	    avrule_write_list(p, decl->avrules, fp, 0) == -1 ||
 	    role_trans_rule_write(p, decl->role_tr_rules, fp) == -1 ||
 	    role_allow_rule_write(decl->role_allow_rules, fp) == -1) {
 		return POLICYDB_ERROR;
 	}
 
 	if (p->policyvers >= MOD_POLICYDB_VERSION_FILENAME_TRANS &&
-	    filename_trans_rule_write(decl->filename_trans_rules, fp))
+	    filename_trans_rule_write(p, decl->filename_trans_rules, fp))
 		return POLICYDB_ERROR;
 
 	if (p->policyvers >= MOD_POLICYDB_VERSION_RANGETRANS &&
@@ -2124,7 +2172,7 @@ static int scope_write(hashtab_key_t key, hashtab_datum_t datum, void *ptr)
 		 * buffer.  this would have been easier with C99's
 		 * dynamic arrays... */
 		rc = POLICYDB_ERROR;
-		dyn_buf = malloc(items * sizeof(*dyn_buf));
+		dyn_buf = calloc(items, sizeof(*dyn_buf));
 		if (!dyn_buf)
 			goto err;
 		buf = dyn_buf;
@@ -2186,7 +2234,7 @@ int policydb_write(policydb_t * p, struct policy_file *fp)
 	unsigned int i, num_syms;
 	uint32_t buf[32], config;
 	size_t items, items2, len;
-	struct policydb_compat_info *info;
+	const struct policydb_compat_info *info;
 	struct policy_data pd;
 	const char *policydb_str;
 
@@ -2204,7 +2252,8 @@ int policydb_write(policydb_t * p, struct policy_file *fp)
 		    p->policy_type == POLICY_BASE) ||
 		    (p->policyvers < MOD_POLICYDB_VERSION_MLS &&
 		    p->policy_type == POLICY_MOD)) {
-			ERR(fp->handle, "policy version %d cannot support MLS",
+			ERR(fp->handle, "%spolicy version %d cannot support MLS",
+			    p->policy_type == POLICY_KERN ? "" : "module ",
 			    p->policyvers);
 			return POLICYDB_ERROR;
 		}
@@ -2237,8 +2286,10 @@ int policydb_write(policydb_t * p, struct policy_file *fp)
 	info = policydb_lookup_compat(p->policyvers, p->policy_type,
 					p->target_platform);
 	if (!info) {
-		ERR(fp->handle, "compatibility lookup failed for policy "
-		    "version %d", p->policyvers);
+		ERR(fp->handle, "compatibility lookup failed for %s%s policy version %d",
+		    p->target_platform == SEPOL_TARGET_SELINUX ? "selinux" : "xen",
+		    p->policy_type == POLICY_KERN ? "" : " module",
+		    p->policyvers);
 		return POLICYDB_ERROR;
 	}
 
@@ -2284,21 +2335,29 @@ int policydb_write(policydb_t * p, struct policy_file *fp)
 			return POLICYDB_ERROR;
 	}
 
-	if (p->policyvers < POLICYDB_VERSION_PERMISSIVE &&
-	    p->policy_type == POLICY_KERN) {
-		ebitmap_node_t *tnode;
+	if (p->policy_type == POLICY_KERN) {
+		if (p->policyvers < POLICYDB_VERSION_PERMISSIVE) {
+			ebitmap_node_t *tnode;
 
-		ebitmap_for_each_positive_bit(&p->permissive_map, tnode, i) {
-			WARN(fp->handle, "Warning! Policy version %d cannot "
-			     "support permissive types, but some were defined",
-			     p->policyvers);
-			break;
-		}
-	}
+			ebitmap_for_each_positive_bit(&p->permissive_map, tnode, i) {
+				WARN(fp->handle, "Warning! Policy version %d cannot "
+					"support permissive types, but some were defined",
+					p->policyvers);
+				break;
+			}
+		} else if (ebitmap_write(&p->permissive_map, fp) == -1)
+			return POLICYDB_ERROR;
 
-	if (p->policyvers >= POLICYDB_VERSION_PERMISSIVE &&
-	    p->policy_type == POLICY_KERN) {
-		if (ebitmap_write(&p->permissive_map, fp) == -1)
+		if (p->policyvers < POLICYDB_VERSION_NEVERAUDIT) {
+			ebitmap_node_t *tnode;
+
+			ebitmap_for_each_positive_bit(&p->neveraudit_map, tnode, i) {
+				WARN(fp->handle, "Warning! Policy version %d cannot "
+					"support neveraudit types, but some were defined",
+					p->policyvers);
+				break;
+			}
+		} else if (ebitmap_write(&p->neveraudit_map, fp) == -1)
 			return POLICYDB_ERROR;
 	}
 

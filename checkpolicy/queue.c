@@ -1,5 +1,5 @@
 
-/* Author : Stephen Smalley, <sds@tycho.nsa.gov> */
+/* Author : Stephen Smalley, <stephen.smalley.work@gmail.com> */
 
 /* FLASK */
 
@@ -102,6 +102,24 @@ queue_element_t queue_head(queue_t q)
 		return NULL;
 
 	return q->head->element;
+}
+
+void queue_clear(queue_t q)
+{
+	queue_node_ptr_t p, temp;
+
+	if (!q)
+		return;
+
+	p = q->head;
+	while (p != NULL) {
+		free(p->element);
+		temp = p;
+		p = p->next;
+		free(temp);
+	}
+
+	q->head = q->tail = NULL;
 }
 
 void queue_destroy(queue_t q)

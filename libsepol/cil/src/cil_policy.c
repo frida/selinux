@@ -41,6 +41,7 @@
 #include "cil_flavor.h"
 #include "cil_find.h"
 #include "cil_mem.h"
+#include "cil_policy.h"
 #include "cil_tree.h"
 #include "cil_list.h"
 #include "cil_symtab.h"
@@ -284,7 +285,7 @@ static void cil_cond_expr_to_policy(FILE *out, struct cil_list *expr, int first)
 	struct cil_list_item *i1 = expr->head;
 
 	if (i1->flavor == CIL_OP) {
-		enum cil_flavor op = (enum cil_flavor)i1->data;
+		enum cil_flavor op = (enum cil_flavor)(uintptr_t)i1->data;
 		fprintf(out, "(");
 		switch (op) {
 		case CIL_NOT:
@@ -384,7 +385,7 @@ static size_t __cil_cons_leaf_operand_len(struct cil_db *db, struct cil_list_ite
 
 static size_t __cil_cons_leaf_op_len(struct cil_list_item *op)
 {
-	enum cil_flavor flavor = (enum cil_flavor)op->data;
+	enum cil_flavor flavor = (enum cil_flavor)(uintptr_t)op->data;
 	size_t len;
 
 	switch (flavor) {
@@ -419,7 +420,7 @@ static size_t cil_cons_expr_len(struct cil_db *db, struct cil_list *cons_expr)
 
 	i1 = cons_expr->head;
 
-	op = (enum cil_flavor)i1->data;
+	op = (enum cil_flavor)(uintptr_t)i1->data;
 	switch (op) {
 	case CIL_NOT:
 		len = 6; /* "(not )" */
@@ -471,7 +472,7 @@ static char *__cil_cons_leaf_operand_to_string(struct cil_db *db, struct cil_lis
 	size_t o_len;
 
 	if (flavor == CIL_CONS_OPERAND) {
-		enum cil_flavor o_flavor = (enum cil_flavor)operand->data;
+		enum cil_flavor o_flavor = (enum cil_flavor)(uintptr_t)operand->data;
 		switch (o_flavor) {
 		case CIL_CONS_U1:
 			o_str = "u1";
@@ -554,7 +555,7 @@ static char *__cil_cons_leaf_operand_to_string(struct cil_db *db, struct cil_lis
 
 static char *__cil_cons_leaf_op_to_string(struct cil_list_item *op, char *new)
 {
-	enum cil_flavor flavor = (enum cil_flavor)op->data;
+	enum cil_flavor flavor = (enum cil_flavor)(uintptr_t)op->data;
 	const char *op_str;
 	size_t len;
 
@@ -598,7 +599,7 @@ static char *__cil_cons_expr_to_string(struct cil_db *db, struct cil_list *cons_
 
 	i1 = cons_expr->head;
 
-	op = (enum cil_flavor)i1->data;
+	op = (enum cil_flavor)(uintptr_t)i1->data;
 	switch (op) {
 	case CIL_NOT:
 		*new++ = '(';
@@ -1007,13 +1008,13 @@ static void cil_validatetrans_to_policy(FILE *out, struct cil_db *db, struct cil
 static void cil_bools_to_policy(FILE *out, struct cil_list *bools)
 {
 	struct cil_list_item *i1;
-	struct cil_bool *bool;
+	struct cil_bool *boolean;
 	const char *value;
 
 	cil_list_for_each(i1, bools) {
-		bool = i1->data;
-		value = bool->value ? "true" : "false";
-		fprintf(out, "bool %s %s;\n", bool->datum.fqn, value);
+		boolean = i1->data;
+		value = boolean->value ? "true" : "false";
+		fprintf(out, "bool %s %s;\n", boolean->datum.fqn, value);
 	}
 }
 
@@ -1111,6 +1112,8 @@ static void cil_xperms_to_policy(FILE *out, struct cil_permissionx *permx)
 
 	if (permx->kind == CIL_PERMX_KIND_IOCTL) {
 		kind = "ioctl";
+	} else if (permx->kind == CIL_PERMX_KIND_NLMSG) {
+		kind = "nlmsg";
 	} else {
 		kind = "???";
 	}
@@ -1255,8 +1258,7 @@ static void cil_type_rule_to_policy(FILE *out, struct cil_type_rule *rule)
 
 static void cil_nametypetransition_to_policy(FILE *out, struct cil_nametypetransition *trans)
 {
-	struct cil_symtab_datum *src, *tgt, *res;
-	struct cil_name *name;
+	struct cil_symtab_datum *src, *tgt, *name, *res;
 	struct cil_list *class_list;
 	struct cil_list_item *i1;
 
@@ -1267,7 +1269,7 @@ static void cil_nametypetransition_to_policy(FILE *out, struct cil_nametypetrans
 
 	class_list = cil_expand_class(trans->obj);
 	cil_list_for_each(i1, class_list) {
-		fprintf(out, "type_transition %s %s : %s %s \"%s\";\n", src->fqn, tgt->fqn, DATUM(i1->data)->fqn, res->fqn, name->datum.fqn);
+		fprintf(out, "type_transition %s %s : %s %s \"%s\";\n", src->fqn, tgt->fqn, DATUM(i1->data)->fqn, res->fqn, name->fqn);
 	}
 	cil_list_destroy(&class_list, CIL_FALSE);
 }
@@ -1293,6 +1295,11 @@ static void cil_rangetransition_to_policy(FILE *out, struct cil_rangetransition 
 static void cil_typepermissive_to_policy(FILE *out, struct cil_typepermissive *rule)
 {
 	fprintf(out, "permissive %s;\n", DATUM(rule->type)->fqn);
+}
+
+static void cil_typeneveraudit_to_policy(FILE *out, struct cil_typeneveraudit *rule)
+{
+	fprintf(out, "neveraudit %s;\n", DATUM(rule->type)->fqn);
 }
 
 struct block_te_rules_extra {
@@ -1357,6 +1364,11 @@ static int __cil_block_te_rules_to_policy_helper(struct cil_tree_node *node, uin
 			cil_typepermissive_to_policy(args->out, node->data);
 		}
 		break;
+	case CIL_TYPENEVERAUDIT:
+		if (args->flavor == node->flavor) {
+			cil_typeneveraudit_to_policy(args->out, node->data);
+		}
+		break;
 	default:
 		break;
 	}
@@ -1371,6 +1383,10 @@ static void cil_block_te_rules_to_policy(FILE *out, struct cil_tree_node *start,
 	args.out = out;
 
 	args.flavor = CIL_TYPEPERMISSIVE;
+	args.rule_kind = 0;
+	cil_tree_walk(start, __cil_block_te_rules_to_policy_helper, NULL, NULL, &args);
+
+	args.flavor = CIL_TYPENEVERAUDIT;
 	args.rule_kind = 0;
 	cil_tree_walk(start, __cil_block_te_rules_to_policy_helper, NULL, NULL, &args);
 
@@ -1436,12 +1452,12 @@ static int __cil_te_rules_to_policy_helper(struct cil_tree_node *node, uint32_t 
 		*finished = CIL_TREE_SKIP_HEAD;
 		break;
 	case CIL_BOOLEANIF: {
-		struct cil_booleanif *bool = node->data;
+		struct cil_booleanif *boolean = node->data;
 		struct cil_tree_node *n;
 		struct cil_condblock *cb;
 
 		fprintf(args->out, "if ");
-		cil_cond_expr_to_policy(args->out, bool->datum_expr, CIL_TRUE);
+		cil_cond_expr_to_policy(args->out, boolean->datum_expr, CIL_TRUE);
 		fprintf(args->out," {\n");
 		n = node->cl_head;
 		cb = n != NULL ? n->data : NULL;
@@ -1659,9 +1675,11 @@ static void cil_sid_contexts_to_policy(FILE *out, struct cil_list *sids, int mls
 
 	cil_list_for_each(i1, sids) {
 		sid = i1->data;
-		fprintf(out, "sid %s ", sid->datum.fqn);
-		cil_context_to_policy(out, sid->context, mls);
-		fprintf(out,"\n");
+		if (sid->context) {
+			fprintf(out, "sid %s ", sid->datum.fqn);
+			cil_context_to_policy(out, sid->context, mls);
+			fprintf(out,"\n");
+		}
 	}
 }
 

@@ -36,26 +36,31 @@ int security_compute_member_raw(const char * scon,
 		ret = -1;
 		goto out;
 	}
-	snprintf(buf, size, "%s %s %hu", scon, tcon, unmap_class(tclass));
+
+	ret = snprintf(buf, size, "%s %s %hu", scon, tcon, unmap_class(tclass));
+	if (ret < 0 || (size_t)ret >= size) {
+		errno = EOVERFLOW;
+		ret = -1;
+		goto out;
+	}
 
 	ret = write(fd, buf, strlen(buf));
 	if (ret < 0)
-		goto out2;
+		goto out;
 
 	memset(buf, 0, size);
 	ret = read(fd, buf, size - 1);
 	if (ret < 0)
-		goto out2;
+		goto out;
 
 	*newcon = strdup(buf);
 	if (!(*newcon)) {
 		ret = -1;
-		goto out2;
+		goto out;
 	}
 	ret = 0;
-      out2:
-	free(buf);
       out:
+	free(buf);
 	close(fd);
 	return ret;
 }

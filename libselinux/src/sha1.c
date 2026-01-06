@@ -11,11 +11,12 @@
 //  Modified to:
 //    - stop symbols being exported for libselinux shared library - October 2015
 //								       Richard Haines <richard_c_haines@btinternet.com>
-//    - Not cast the workspace from a byte array to a CHAR64LONG16 due to alignment isses.
+//    - Not cast the workspace from a byte array to a CHAR64LONG16 due to alignment issues.
 //      Fixes:
 //        sha1.c:73:33: error: cast from 'uint8_t *' (aka 'unsigned char *') to 'CHAR64LONG16 *' increases required alignment from 1 to 4 [-Werror,-Wcast-align]
 //             CHAR64LONG16*       block = (CHAR64LONG16*) workspace;
 //                                                                     William Roberts <william.c.roberts@intel.com>
+//    - Silence clang's -Wextra-semi-stmt warning - July 2021, Nicolas Iooss <nicolas.iooss@m4x.org>
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -24,6 +25,8 @@
 
 #include "sha1.h"
 #include <memory.h>
+
+#include "selinux_internal.h"
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 //  TYPES
@@ -49,11 +52,11 @@ typedef union
     ^block->l[(i+2)&15]^block->l[i&15],1))
 
 // (R0+R1), R2, R3, R4 are the different operations used in SHA1
-#define R0(v,w,x,y,z,i)  z += ((w&(x^y))^y)     + blk0(i)+ 0x5A827999 + rol(v,5); w=rol(w,30);
-#define R1(v,w,x,y,z,i)  z += ((w&(x^y))^y)     + blk(i) + 0x5A827999 + rol(v,5); w=rol(w,30);
-#define R2(v,w,x,y,z,i)  z += (w^x^y)           + blk(i) + 0x6ED9EBA1 + rol(v,5); w=rol(w,30);
-#define R3(v,w,x,y,z,i)  z += (((w|x)&y)|(w&x)) + blk(i) + 0x8F1BBCDC + rol(v,5); w=rol(w,30);
-#define R4(v,w,x,y,z,i)  z += (w^x^y)           + blk(i) + 0xCA62C1D6 + rol(v,5); w=rol(w,30);
+#define R0(v,w,x,y,z,i)  do { z += ((w&(x^y))^y)     + blk0(i)+ 0x5A827999 + rol(v,5); w=rol(w,30); } while (0)
+#define R1(v,w,x,y,z,i)  do { z += ((w&(x^y))^y)     + blk(i) + 0x5A827999 + rol(v,5); w=rol(w,30); } while (0)
+#define R2(v,w,x,y,z,i)  do { z += (w^x^y)           + blk(i) + 0x6ED9EBA1 + rol(v,5); w=rol(w,30); } while (0)
+#define R3(v,w,x,y,z,i)  do { z += (((w|x)&y)|(w&x)) + blk(i) + 0x8F1BBCDC + rol(v,5); w=rol(w,30); } while (0)
+#define R4(v,w,x,y,z,i)  do { z += (w^x^y)           + blk(i) + 0xCA62C1D6 + rol(v,5); w=rol(w,30); } while (0)
 
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -61,6 +64,7 @@ typedef union
 //
 //  Hash a single 512-bit block. This is the core of the algorithm
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+ignore_unsigned_overflow_
 static
 void
     TransformFunction
@@ -151,7 +155,7 @@ void
     Sha1Update
     (
         Sha1Context*        Context,
-        void*               Buffer,
+        const void*         Buffer,
         uint32_t            BufferSize
     )
 {
@@ -172,7 +176,7 @@ void
         TransformFunction(Context->State, Context->Buffer);
         for (; i + 63 < BufferSize; i += 64)
         {
-            TransformFunction(Context->State, (uint8_t*)Buffer + i);
+            TransformFunction(Context->State, (const uint8_t*)Buffer + i);
         }
         j = 0;
     }
@@ -181,7 +185,7 @@ void
         i = 0;
     }
 
-    memcpy(&Context->Buffer[j], &((uint8_t*)Buffer)[i], BufferSize - i);
+    memcpy(&Context->Buffer[j], &((const uint8_t*)Buffer)[i], BufferSize - i);
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -205,10 +209,10 @@ void
         finalcount[i] = (unsigned char)((Context->Count[(i >= 4 ? 0 : 1)]
          >> ((3-(i & 3)) * 8) ) & 255);  // Endian independent
     }
-    Sha1Update(Context, (uint8_t*)"\x80", 1);
+    Sha1Update(Context, (const uint8_t*)"\x80", 1);
     while ((Context->Count[0] & 504) != 448)
     {
-        Sha1Update(Context, (uint8_t*)"\0", 1);
+        Sha1Update(Context, (const uint8_t*)"\0", 1);
     }
 
     Sha1Update(Context, finalcount, 8);  // Should cause a Sha1TransformFunction()

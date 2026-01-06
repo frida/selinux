@@ -34,6 +34,7 @@
 #include <assert.h>
 
 #include "debug.h"
+#include "private.h"
 
 #undef min
 #define min(a,b) (((a) < (b)) ? (a) : (b))
@@ -78,7 +79,7 @@ typedef struct missing_requirement {
 	uint32_t perm_value;
 } missing_requirement_t;
 
-static const char *symtab_names[SYM_NUM] = {
+static const char * const symtab_names[SYM_NUM] = {
 	"common", "class", "role", "type/attribute", "user",
 	"bool", "level", "category"
 };
@@ -164,7 +165,7 @@ static int permission_copy_callback(hashtab_key_t key, hashtab_datum_t datum,
 					     (hashtab_datum_t) new_perm);
 			if (ret) {
 				ERR(state->handle,
-				    "could not insert permission into class\n");
+				    "could not insert permission into class");
 				goto err;
 			}
 			new_perm->s.value = dest_class->permissions.nprim + 1;
@@ -190,8 +191,9 @@ static int permission_copy_callback(hashtab_key_t key, hashtab_datum_t datum,
 			ERR(state->handle, "Out of memory!");
 			return -1;
 		}
-		memcpy(newmap, mod->perm_map[sclassi],
-		       mod->perm_map_len[sclassi] * sizeof(*newmap));
+		if (mod->perm_map_len[sclassi] > 0) {
+			memcpy(newmap, mod->perm_map[sclassi], mod->perm_map_len[sclassi] * sizeof(*newmap));
+		}
 		free(mod->perm_map[sclassi]);
 		mod->perm_map[sclassi] = newmap;
 		mod->perm_map_len[sclassi] = perm->s.value;
@@ -287,7 +289,7 @@ static int class_copy_callback(hashtab_key_t key, hashtab_datum_t datum,
 			new_class =
 			    (class_datum_t *) calloc(1, sizeof(class_datum_t));
 			if (new_class == NULL) {
-				ERR(state->handle, "Memory error\n");
+				ERR(state->handle, "Memory error");
 				ret = SEPOL_ERR;
 				goto err;
 			}
@@ -298,7 +300,7 @@ static int class_copy_callback(hashtab_key_t key, hashtab_datum_t datum,
 			}
 			new_id = strdup(id);
 			if (new_id == NULL) {
-				ERR(state->handle, "Memory error\n");
+				ERR(state->handle, "Memory error");
 				symtab_destroy(&new_class->permissions);
 				ret = SEPOL_ERR;
 				goto err;
@@ -694,7 +696,7 @@ static int sens_copy_callback(hashtab_key_t key, hashtab_datum_t datum,
 			return SEPOL_ENOTSUP;
 		} else {
 			ERR(state->handle,
-			    "%s: has an unknown scope: %d\n",
+			    "%s: has an unknown scope: %d",
 			    state->cur_mod_name, scope->scope);
 			return SEPOL_ENOTSUP;
 		}
@@ -736,7 +738,7 @@ static int cat_copy_callback(hashtab_key_t key, hashtab_datum_t datum,
 		} else {
 			/* unknown scope?  malformed policy? */
 			ERR(state->handle,
-			    "%s: has an unknown scope: %d\n",
+			    "%s: has an unknown scope: %d",
 			    state->cur_mod_name, scope->scope);
 			return SEPOL_ENOTSUP;
 		}
@@ -747,7 +749,7 @@ static int cat_copy_callback(hashtab_key_t key, hashtab_datum_t datum,
 	return 0;
 }
 
-static int (*copy_callback_f[SYM_NUM]) (hashtab_key_t key,
+static int (*const copy_callback_f[SYM_NUM]) (hashtab_key_t key,
 					hashtab_datum_t datum, void *datap) = {
 NULL, class_copy_callback, role_copy_callback, type_copy_callback,
 	    user_copy_callback, bool_copy_callback, sens_copy_callback,
@@ -764,13 +766,19 @@ static int type_bounds_copy_callback(hashtab_key_t key,
 	type_datum_t *type = (type_datum_t *) datum;
 	type_datum_t *dest;
 	uint32_t bounds_val;
+	hashtab_t type_tab;
 
 	if (!type->bounds)
 		return 0;
 
+	if (state->dest_decl == NULL)
+		type_tab = state->base->p_types.table;
+	else
+		type_tab = state->dest_decl->p_types.table;
+
 	bounds_val = state->cur->map[SYM_TYPES][type->bounds - 1];
 
-	dest = hashtab_search(state->base->p_types.table, key);
+	dest = hashtab_search(type_tab, key);
 	if (!dest) {
 		ERR(state->handle,
 		    "Type lookup failed for %s", (char *)key);
@@ -793,13 +801,19 @@ static int role_bounds_copy_callback(hashtab_key_t key,
 	role_datum_t *role = (role_datum_t *) datum;
 	role_datum_t *dest;
 	uint32_t bounds_val;
+	hashtab_t role_tab;
 
 	if (!role->bounds)
 		return 0;
 
+	if (state->dest_decl == NULL)
+		role_tab = state->base->p_roles.table;
+	else
+		role_tab = state->dest_decl->p_roles.table;
+
 	bounds_val = state->cur->map[SYM_ROLES][role->bounds - 1];
 
-	dest = hashtab_search(state->base->p_roles.table, key);
+	dest = hashtab_search(role_tab, key);
 	if (!dest) {
 		ERR(state->handle,
 		    "Role lookup failed for %s", (char *)key);
@@ -822,13 +836,19 @@ static int user_bounds_copy_callback(hashtab_key_t key,
 	user_datum_t *user = (user_datum_t *) datum;
 	user_datum_t *dest;
 	uint32_t bounds_val;
+	hashtab_t user_tab;
 
 	if (!user->bounds)
 		return 0;
 
+	if (state->dest_decl == NULL)
+		user_tab = state->base->p_users.table;
+	else
+		user_tab = state->dest_decl->p_users.table;
+
 	bounds_val = state->cur->map[SYM_USERS][user->bounds - 1];
 
-	dest = hashtab_search(state->base->p_users.table, key);
+	dest = hashtab_search(user_tab, key);
 	if (!dest) {
 		ERR(state->handle,
 		    "User lookup failed for %s", (char *)key);
@@ -956,26 +976,28 @@ static int alias_copy_callback(hashtab_key_t key, hashtab_datum_t datum,
 
 /*********** callbacks that fix bitmaps ***********/
 
-static int type_set_convert(type_set_t * types, type_set_t * dst,
-			    policy_module_t * mod, link_state_t * state
-			    __attribute__ ((unused)))
+static int ebitmap_convert(const ebitmap_t *src, ebitmap_t *dst, const uint32_t *map)
 {
-	unsigned int i;
-	ebitmap_node_t *tnode;
-	ebitmap_for_each_positive_bit(&types->types, tnode, i) {
-		assert(mod->map[SYM_TYPES][i]);
-		if (ebitmap_set_bit
-		    (&dst->types, mod->map[SYM_TYPES][i] - 1, 1)) {
-			goto cleanup;
-		}
+	unsigned int bit;
+	ebitmap_node_t *node;
+	ebitmap_for_each_positive_bit(src, node, bit) {
+		assert(map[bit]);
+		if (ebitmap_set_bit(dst, map[bit] - 1, 1))
+			return -1;
 	}
-	ebitmap_for_each_positive_bit(&types->negset, tnode, i) {
-		assert(mod->map[SYM_TYPES][i]);
-		if (ebitmap_set_bit
-		    (&dst->negset, mod->map[SYM_TYPES][i] - 1, 1)) {
-			goto cleanup;
-		}
-	}
+
+	return 0;
+}
+
+static int type_set_convert(const type_set_t * types, type_set_t * dst,
+			    const policy_module_t * mod)
+{
+	if (ebitmap_convert(&types->types, &dst->types, mod->map[SYM_TYPES]))
+		goto cleanup;
+
+	if (ebitmap_convert(&types->negset, &dst->negset, mod->map[SYM_TYPES]))
+		goto cleanup;
+
 	dst->flags = types->flags;
 	return 0;
 
@@ -986,13 +1008,13 @@ static int type_set_convert(type_set_t * types, type_set_t * dst,
 /* OR 2 typemaps together and at the same time map the src types to
  * the correct values in the dst typeset.
  */
-static int type_set_or_convert(type_set_t * types, type_set_t * dst,
-			       policy_module_t * mod, link_state_t * state)
+static int type_set_or_convert(const type_set_t * types, type_set_t * dst,
+			       const policy_module_t * mod)
 {
 	type_set_t ts_tmp;
 
 	type_set_init(&ts_tmp);
-	if (type_set_convert(types, &ts_tmp, mod, state) == -1) {
+	if (type_set_convert(types, &ts_tmp, mod) == -1) {
 		goto cleanup;
 	}
 	if (type_set_or_eq(dst, &ts_tmp)) {
@@ -1002,7 +1024,6 @@ static int type_set_or_convert(type_set_t * types, type_set_t * dst,
 	return 0;
 
       cleanup:
-	ERR(state->handle, "Out of memory!");
 	type_set_destroy(&ts_tmp);
 	return -1;
 }
@@ -1010,18 +1031,11 @@ static int type_set_or_convert(type_set_t * types, type_set_t * dst,
 static int role_set_or_convert(role_set_t * roles, role_set_t * dst,
 			       policy_module_t * mod, link_state_t * state)
 {
-	unsigned int i;
 	ebitmap_t tmp;
-	ebitmap_node_t *rnode;
 
 	ebitmap_init(&tmp);
-	ebitmap_for_each_positive_bit(&roles->roles, rnode, i) {
-		assert(mod->map[SYM_ROLES][i]);
-		if (ebitmap_set_bit
-		    (&tmp, mod->map[SYM_ROLES][i] - 1, 1)) {
-			goto cleanup;
-		}
-	}
+	if (ebitmap_convert(&roles->roles, &tmp, mod->map[SYM_ROLES]))
+		goto cleanup;
 	if (ebitmap_union(&dst->roles, &tmp)) {
 		goto cleanup;
 	}
@@ -1086,13 +1100,11 @@ static int mls_range_convert(mls_semantic_range_t * src, mls_semantic_range_t * 
 static int role_fix_callback(hashtab_key_t key, hashtab_datum_t datum,
 			     void *data)
 {
-	unsigned int i;
 	char *id = key;
 	role_datum_t *role, *dest_role = NULL;
 	link_state_t *state = (link_state_t *) data;
 	ebitmap_t e_tmp;
 	policy_module_t *mod = state->cur;
-	ebitmap_node_t *rnode;
 	hashtab_t role_tab;
 
 	role = (role_datum_t *) datum;
@@ -1109,30 +1121,20 @@ static int role_fix_callback(hashtab_key_t key, hashtab_datum_t datum,
 	}
 
 	ebitmap_init(&e_tmp);
-	ebitmap_for_each_positive_bit(&role->dominates, rnode, i) {
-		assert(mod->map[SYM_ROLES][i]);
-		if (ebitmap_set_bit
-		    (&e_tmp, mod->map[SYM_ROLES][i] - 1, 1)) {
-			goto cleanup;
-		}
-	}
+	if (ebitmap_convert(&role->dominates, &e_tmp, mod->map[SYM_ROLES]))
+		goto cleanup;
 	if (ebitmap_union(&dest_role->dominates, &e_tmp)) {
 		goto cleanup;
 	}
-	if (type_set_or_convert(&role->types, &dest_role->types, mod, state)) {
+	if (type_set_or_convert(&role->types, &dest_role->types, mod)) {
 		goto cleanup;
 	}
 	ebitmap_destroy(&e_tmp);
 	
 	if (role->flavor == ROLE_ATTRIB) {
 		ebitmap_init(&e_tmp);
-		ebitmap_for_each_positive_bit(&role->roles, rnode, i) {
-			assert(mod->map[SYM_ROLES][i]);
-			if (ebitmap_set_bit
-			    (&e_tmp, mod->map[SYM_ROLES][i] - 1, 1)) {
-				goto cleanup;
-			}
-		}
+		if (ebitmap_convert(&role->roles, &e_tmp, mod->map[SYM_ROLES]))
+			goto cleanup;
 		if (ebitmap_union(&dest_role->roles, &e_tmp)) {
 			goto cleanup;
 		}
@@ -1150,13 +1152,11 @@ static int role_fix_callback(hashtab_key_t key, hashtab_datum_t datum,
 static int type_fix_callback(hashtab_key_t key, hashtab_datum_t datum,
 			     void *data)
 {
-	unsigned int i;
 	char *id = key;
 	type_datum_t *type, *new_type = NULL;
 	link_state_t *state = (link_state_t *) data;
 	ebitmap_t e_tmp;
 	policy_module_t *mod = state->cur;
-	ebitmap_node_t *tnode;
 	symtab_t *typetab;
 
 	type = (type_datum_t *) datum;
@@ -1179,13 +1179,8 @@ static int type_fix_callback(hashtab_key_t key, hashtab_datum_t datum,
 	}
 
 	ebitmap_init(&e_tmp);
-	ebitmap_for_each_positive_bit(&type->types, tnode, i) {
-		assert(mod->map[SYM_TYPES][i]);
-		if (ebitmap_set_bit
-		    (&e_tmp, mod->map[SYM_TYPES][i] - 1, 1)) {
-			goto cleanup;
-		}
-	}
+	if (ebitmap_convert(&type->types, &e_tmp, mod->map[SYM_TYPES]))
+		goto cleanup;
 	if (ebitmap_union(&new_type->types, &e_tmp)) {
 		goto cleanup;
 	}
@@ -1238,7 +1233,7 @@ static int user_fix_callback(hashtab_key_t key, hashtab_datum_t datum,
 	return -1;
 }
 
-static int (*fix_callback_f[SYM_NUM]) (hashtab_key_t key, hashtab_datum_t datum,
+static int (*const fix_callback_f[SYM_NUM]) (hashtab_key_t key, hashtab_datum_t datum,
 				       void *datap) = {
 NULL, NULL, role_fix_callback, type_fix_callback, user_fix_callback,
 	    NULL, NULL, NULL};
@@ -1267,9 +1262,8 @@ static int copy_avrule_list(avrule_t * list, avrule_t ** dst,
 		new_rule->specified = cur->specified;
 		new_rule->flags = cur->flags;
 		if (type_set_convert
-		    (&cur->stypes, &new_rule->stypes, module, state) == -1
-		    || type_set_convert(&cur->ttypes, &new_rule->ttypes, module,
-					state) == -1) {
+		    (&cur->stypes, &new_rule->stypes, module) == -1
+		    || type_set_convert(&cur->ttypes, &new_rule->ttypes, module) == -1) {
 			goto cleanup;
 		}
 
@@ -1291,10 +1285,10 @@ static int copy_avrule_list(avrule_t * list, avrule_t ** dst,
 				     i <
 				     module->perm_map_len[cur_perm->tclass - 1];
 				     i++) {
-					if (!(cur_perm->data & (1U << i)))
+					if (!(cur_perm->data & (UINT32_C(1) << i)))
 						continue;
 					new_perm->data |=
-					    (1U <<
+					    (UINT32_C(1) <<
 					     (module->
 					      perm_map[cur_perm->tclass - 1][i] -
 					      1));
@@ -1353,8 +1347,6 @@ static int copy_role_trans_list(role_trans_rule_t * list,
 				policy_module_t * module, link_state_t * state)
 {
 	role_trans_rule_t *cur, *new_rule = NULL, *tail;
-	unsigned int i;
-	ebitmap_node_t *cnode;
 
 	cur = list;
 	tail = *dst;
@@ -1372,19 +1364,12 @@ static int copy_role_trans_list(role_trans_rule_t * list,
 		if (role_set_or_convert
 		    (&cur->roles, &new_rule->roles, module, state)
 		    || type_set_or_convert(&cur->types, &new_rule->types,
-					   module, state)) {
+					   module)) {
 			goto cleanup;
 		}
 
-		ebitmap_for_each_positive_bit(&cur->classes, cnode, i) {
-			assert(module->map[SYM_CLASSES][i]);
-			if (ebitmap_set_bit(&new_rule->classes,
-					    module->
-					    map[SYM_CLASSES][i] - 1,
-					    1)) {
-				goto cleanup;
-			}
-		}
+		if (ebitmap_convert(&cur->classes, &new_rule->classes, module->map[SYM_CLASSES]))
+			goto cleanup;
 
 		new_rule->new_role = module->map[SYM_ROLES][cur->new_role - 1];
 
@@ -1474,12 +1459,13 @@ static int copy_filename_trans_list(filename_trans_rule_t * list,
 		if (!new_rule->name)
 			goto err;
 
-		if (type_set_or_convert(&cur->stypes, &new_rule->stypes, module, state) ||
-		    type_set_or_convert(&cur->ttypes, &new_rule->ttypes, module, state))
+		if (type_set_or_convert(&cur->stypes, &new_rule->stypes, module) ||
+		    type_set_or_convert(&cur->ttypes, &new_rule->ttypes, module))
 			goto err;
 
 		new_rule->tclass = module->map[SYM_CLASSES][cur->tclass - 1];
 		new_rule->otype = module->map[SYM_TYPES][cur->otype - 1];
+		new_rule->flags = cur->flags;
 
 		cur = cur->next;
 	}
@@ -1494,8 +1480,6 @@ static int copy_range_trans_list(range_trans_rule_t * rules,
 				 policy_module_t * mod, link_state_t * state)
 {
 	range_trans_rule_t *rule, *new_rule = NULL;
-	unsigned int i;
-	ebitmap_node_t *cnode;
 
 	for (rule = rules; rule; rule = rule->next) {
 		new_rule =
@@ -1509,21 +1493,15 @@ static int copy_range_trans_list(range_trans_rule_t * rules,
 		*dst = new_rule;
 
 		if (type_set_convert(&rule->stypes, &new_rule->stypes,
-				     mod, state))
+				     mod))
 			goto cleanup;
 
 		if (type_set_convert(&rule->ttypes, &new_rule->ttypes,
-				     mod, state))
+				     mod))
 			goto cleanup;
 
-		ebitmap_for_each_positive_bit(&rule->tclasses, cnode, i) {
-			assert(mod->map[SYM_CLASSES][i]);
-			if (ebitmap_set_bit
-			    (&new_rule->tclasses,
-			     mod->map[SYM_CLASSES][i] - 1, 1)) {
-				goto cleanup;
-			}
-		}
+		if (ebitmap_convert(&rule->tclasses, &new_rule->tclasses, mod->map[SYM_CLASSES]))
+			goto cleanup;
 
 		if (mls_range_convert(&rule->trange, &new_rule->trange, mod, state))
 			goto cleanup;
@@ -1564,9 +1542,9 @@ static int copy_cond_list(cond_node_t * list, cond_node_t ** dst,
 			/* expression nodes don't have a bool value of 0 - don't map them */
 			if (cur_expr->expr_type != COND_BOOL)
 				continue;
-			assert(module->map[SYM_BOOLS][cur_expr->bool - 1] != 0);
-			cur_expr->bool =
-			    module->map[SYM_BOOLS][cur_expr->bool - 1];
+			assert(module->map[SYM_BOOLS][cur_expr->boolean - 1] != 0);
+			cur_expr->boolean =
+			    module->map[SYM_BOOLS][cur_expr->boolean - 1];
 		}
 		new_node->nbools = cur->nbools;
 		/* FIXME should COND_MAX_BOOLS be used here? */
@@ -1679,25 +1657,18 @@ static int copy_scope_index(scope_index_t * src, scope_index_t * dest,
 	}
 
 	/* next copy the enabled permissions data  */
-	if ((dest->class_perms_map = malloc(largest_mapped_class_value *
-					    sizeof(*dest->class_perms_map))) ==
-	    NULL) {
+	if ((dest->class_perms_map = calloc(largest_mapped_class_value,
+					    sizeof(*dest->class_perms_map))) == NULL) {
 		goto cleanup;
-	}
-	for (i = 0; i < largest_mapped_class_value; i++) {
-		ebitmap_init(dest->class_perms_map + i);
 	}
 	dest->class_perms_len = largest_mapped_class_value;
 	for (i = 0; i < src->class_perms_len; i++) {
-		ebitmap_t *srcmap = src->class_perms_map + i;
+		const ebitmap_t *srcmap = src->class_perms_map + i;
 		ebitmap_t *destmap =
 		    dest->class_perms_map + module->map[SYM_CLASSES][i] - 1;
-		ebitmap_for_each_positive_bit(srcmap, node, j) {
-			if (ebitmap_set_bit(destmap, module->perm_map[i][j] - 1,
-					    1)) {
-				goto cleanup;
-			}
-		}
+
+		if (ebitmap_convert(srcmap, destmap, module->perm_map[i]))
+			goto cleanup;
 	}
 
 	return 0;
@@ -1779,7 +1750,7 @@ static int copy_avrule_block(link_state_t * state, policy_module_t * module,
 		if (module->policy->name != NULL) {
 			new_decl->module_name = strdup(module->policy->name);
 			if (new_decl->module_name == NULL) {
-				ERR(state->handle, "Out of memory\n");
+				ERR(state->handle, "Out of memory");
 				avrule_decl_destroy(new_decl);
 				ret = -1;
 				goto cleanup;
@@ -1972,7 +1943,7 @@ static int find_perm(hashtab_key_t key, hashtab_datum_t datum, void *varg)
  * Note that if a declaration had no requirement at all (e.g., an ELSE
  * block) this returns 1. */
 static int is_decl_requires_met(link_state_t * state,
-				avrule_decl_t * decl,
+				const avrule_decl_t * decl,
 				struct missing_requirement *req)
 {
 	/* (This algorithm is very unoptimized.  It performs many
@@ -1980,9 +1951,9 @@ static int is_decl_requires_met(link_state_t * state,
 	 * which symbols have been verified, so that they do not need
 	 * to be re-checked.) */
 	unsigned int i, j;
-	ebitmap_t *bitmap;
-	char *id, *perm_id;
-	policydb_t *pol = state->base;
+	const ebitmap_t *bitmap;
+	const char *id, *perm_id;
+	const policydb_t *pol = state->base;
 	ebitmap_node_t *node;
 
 	/* check that all symbols have been satisfied */
@@ -2008,27 +1979,29 @@ static int is_decl_requires_met(link_state_t * state,
 	}
 	/* check that all classes and permissions have been satisfied */
 	for (i = 0; i < decl->required.class_perms_len; i++) {
+		const class_datum_t *cladatum = pol->class_val_to_struct[i];
+		const scope_datum_t *scope;
 
-		bitmap = decl->required.class_perms_map + i;
+		bitmap = &decl->required.class_perms_map[i];
+		id = pol->p_class_val_to_name[i];
+
+
+		if (!is_id_enabled(id, state->base, SYM_CLASSES)) {
+			return 0;
+		}
+
+		scope = hashtab_search(state->base->p_classes_scope.table, id);
+		if (scope == NULL) {
+			ERR(state->handle,
+				"Could not find scope information for class %s",
+				id);
+			return -1;
+		}
+
 		ebitmap_for_each_positive_bit(bitmap, node, j) {
 			struct find_perm_arg fparg;
-			class_datum_t *cladatum;
 			uint32_t perm_value = j + 1;
 			int rc;
-			scope_datum_t *scope;
-
-			id = pol->p_class_val_to_name[i];
-			cladatum = pol->class_val_to_struct[i];
-
-			scope =
-			    hashtab_search(state->base->p_classes_scope.table,
-					   id);
-			if (scope == NULL) {
-				ERR(state->handle,
-				    "Could not find scope information for class %s",
-				    id);
-				return -1;
-			}
 
 			fparg.valuep = perm_value;
 			fparg.key = NULL;
@@ -2043,7 +2016,7 @@ static int is_decl_requires_met(link_state_t * state,
 			perm_id = fparg.key;
 
 			assert(perm_id != NULL);
-			if (!is_perm_enabled(id, perm_id, state->base)) {
+			if (!is_perm_existent(cladatum, perm_id)) {
 				if (req != NULL) {
 					req->symbol_type = SYM_CLASSES;
 					req->symbol_value = i + 1;
@@ -2066,7 +2039,7 @@ static int debug_requirements(link_state_t * state, policydb_t * p)
 	memset(&req, 0, sizeof(req));
 
 	for (cur = p->global; cur != NULL; cur = cur->next) {
-		if (cur->enabled != NULL)
+		if (cur->enabled != NULL || cur->branch_list == NULL)
 			continue;
 
 		ret = is_decl_requires_met(state, cur->branch_list, &req);
@@ -2189,6 +2162,11 @@ static int enable_avrules(link_state_t * state, policydb_t * pol)
 	/* 1) enable all of the non-else blocks */
 	for (block = pol->global; block != NULL; block = block->next) {
 		block->enabled = block->branch_list;
+		if (!block->enabled) {
+			ERR(state->handle, "Global block has no avrules!");
+			ret = SEPOL_ERR;
+			goto out;
+		}
 		block->enabled->enabled = 1;
 		for (decl = block->branch_list->next; decl != NULL;
 		     decl = decl->next)
@@ -2206,7 +2184,7 @@ static int enable_avrules(link_state_t * state, policydb_t * pol)
 			if (state->verbose) {
 				const char *mod_name = decl->module_name ?
 				    decl->module_name : "BASE";
-				INFO(state->handle, "check module %s decl %d\n",
+				INFO(state->handle, "check module %s decl %d",
 				     mod_name, decl->decl_id);
 			}
 			rc = is_decl_requires_met(state, decl, &req);
@@ -2388,120 +2366,6 @@ static int prepare_base(link_state_t * state, uint32_t num_mod_decls)
 	return 0;
 }
 
-static int expand_role_attributes(hashtab_key_t key, hashtab_datum_t datum,
-				  void * data)
-{
-	char *id;
-	role_datum_t *role, *sub_attr;
-	link_state_t *state;
-	unsigned int i;
-	ebitmap_node_t *rnode;
-
-	id = key;
-	role = (role_datum_t *)datum;
-	state = (link_state_t *)data;
-
-	if (strcmp(id, OBJECT_R) == 0){
-		/* object_r is never a role attribute by far */
-		return 0;
-	}
-
-	if (role->flavor != ROLE_ATTRIB)
-		return 0;
-
-	if (state->verbose)
-		INFO(state->handle, "expanding role attribute %s", id);
-
-restart:
-	ebitmap_for_each_positive_bit(&role->roles, rnode, i) {
-		sub_attr = state->base->role_val_to_struct[i];
-		if (sub_attr->flavor != ROLE_ATTRIB)
-			continue;
-
-		/* remove the sub role attribute from the parent
-		 * role attribute's roles ebitmap */
-		if (ebitmap_set_bit(&role->roles, i, 0))
-			return -1;
-
-		/* loop dependency of role attributes */
-		if (sub_attr->s.value == role->s.value)
-			continue;
-
-		/* now go on to expand a sub role attribute
-		 * by escalating its roles ebitmap */
-		if (ebitmap_union(&role->roles, &sub_attr->roles)) {
-			ERR(state->handle, "Out of memory!");
-			return -1;
-		}
-
-		/* sub_attr->roles may contain other role attributes,
-		 * re-scan the parent role attribute's roles ebitmap */
-		goto restart;
-	}
-
-	return 0;
-}
-
-/* For any role attribute in a declaration's local symtab[SYM_ROLES] table,
- * copy its roles ebitmap into its duplicate's in the base->p_roles.table.
- */
-static int populate_decl_roleattributes(hashtab_key_t key, 
-					hashtab_datum_t datum,
-					void *data)
-{
-	char *id = key;
-	role_datum_t *decl_role, *base_role;
-	link_state_t *state = (link_state_t *)data;
-
-	decl_role = (role_datum_t *)datum;
-
-	if (strcmp(id, OBJECT_R) == 0) {
-		/* object_r is never a role attribute by far */
-		return 0;
-	}
-
-	if (decl_role->flavor != ROLE_ATTRIB)
-		return 0;
-
-	base_role = (role_datum_t *)hashtab_search(state->base->p_roles.table,
-						   id);
-	assert(base_role != NULL && base_role->flavor == ROLE_ATTRIB);
-
-	if (ebitmap_union(&base_role->roles, &decl_role->roles)) {
-		ERR(state->handle, "Out of memory!");
-		return -1;
-	}
-
-	return 0;
-}
-
-static int populate_roleattributes(link_state_t *state, policydb_t *pol)
-{
-	avrule_block_t *block;
-	avrule_decl_t *decl;
-
-	if (state->verbose)
-		INFO(state->handle, "Populating role-attribute relationship "
-			    "from enabled declarations' local symtab.");
-
-	/* Iterate through all of the blocks skipping the first(which is the
-	 * global block, is required to be present and can't have an else).
-	 * If the block is disabled or not having an enabled decl, skip it.
-	 */
-	for (block = pol->global->next; block != NULL; block = block->next)
-	{
-		decl = block->enabled;
-		if (decl == NULL || decl->enabled == 0)
-			continue;
-
-		if (hashtab_map(decl->symtab[SYM_ROLES].table, 
-				populate_decl_roleattributes, state))
-			return -1;
-	}
-
-	return 0;
-}
-
 /* Link a set of modules into a base module. This process is somewhat
  * similar to an actual compiler: it requires a set of order dependent
  * steps.  The base and every module must have been indexed prior to
@@ -2552,7 +2416,7 @@ int link_modules(sepol_handle_t * handle,
 
 		if (mods[i]->policyvers > b->policyvers) {
 			WARN(state.handle,
-			     "Upgrading policy version from %u to %u\n", b->policyvers, mods[i]->policyvers);
+			     "Upgrading policy version from %u to %u", b->policyvers, mods[i]->policyvers);
 			b->policyvers = mods[i]->policyvers;
 		}
 
@@ -2570,36 +2434,6 @@ int link_modules(sepol_handle_t * handle,
 		num_mod_decls += modules[i]->num_decls;
 	}
 	if (prepare_base(&state, num_mod_decls) == -1) {
-		goto cleanup;
-	}
-
-	/* copy all types, declared and required */
-	for (i = 0; i < len; i++) {
-		state.cur = modules[i];
-		state.cur_mod_name = modules[i]->policy->name;
-		ret =
-		    hashtab_map(modules[i]->policy->p_types.table,
-				type_copy_callback, &state);
-		if (ret) {
-			retval = ret;
-			goto cleanup;
-		}
-	}
-
-	/* then copy everything else, including aliases, and fixup attributes */
-	for (i = 0; i < len; i++) {
-		state.cur = modules[i];
-		state.cur_mod_name = modules[i]->policy->name;
-		ret =
-		    copy_identifiers(&state, modules[i]->policy->symtab, NULL);
-		if (ret) {
-			retval = ret;
-			goto cleanup;
-		}
-	}
-
-	if (policydb_index_others(state.handle, state.base, 0)) {
-		ERR(state.handle, "Error while indexing others");
 		goto cleanup;
 	}
 
@@ -2628,21 +2462,6 @@ int link_modules(sepol_handle_t * handle,
 		goto cleanup;
 	}
 
-	/* Now that all role attribute's roles ebitmap have been settled,
-	 * escalate sub role attribute's roles ebitmap into that of parent.
-	 *
-	 * First, since some role-attribute relationships could be recorded
-	 * in some decl's local symtab(see get_local_role()), we need to
-	 * populate them up to the base.p_roles table. */
-	if (populate_roleattributes(&state, state.base)) {
-		retval = SEPOL_EREQ;
-		goto cleanup;
-	}
-	
-	/* Now do the escalation. */
-	if (hashtab_map(state.base->p_roles.table, expand_role_attributes,
-			&state))
-		goto cleanup;
 
 	retval = 0;
       cleanup:

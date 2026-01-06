@@ -1,5 +1,5 @@
 # Installation directories.
-LINGUAS ?= ru
+LINGUAS ?=
 PREFIX ?= /usr
 BINDIR ?= $(PREFIX)/bin
 MANDIR ?= $(PREFIX)/share/man
@@ -12,7 +12,7 @@ AUDITH ?= $(shell test -f $(INCLUDEDIR)/libaudit.h && echo y)
 # This will make newrole a setuid root program.
 # The capabilities used are: CAP_AUDIT_WRITE.
 AUDIT_LOG_PRIV ?= n
-# Enable capabilities to permit newrole to utilitize the pam_namespace module.
+# Enable capabilities to permit newrole to utilize the pam_namespace module.
 # This will make newrole a setuid root program.
 # The capabilities used are: CAP_SYS_ADMIN, CAP_CHOWN, CAP_FOWNER and
 # CAP_DAC_OVERRIDE. 
@@ -24,8 +24,9 @@ VERSION = $(shell cat ../VERSION)
 
 CFLAGS ?= -Werror -Wall -W
 EXTRA_OBJS =
-override CFLAGS += -DVERSION=\"$(VERSION)\" -DUSE_NLS -DLOCALEDIR="\"$(LOCALEDIR)\"" -DPACKAGE="\"policycoreutils\""
-override LDLIBS += -lselinux
+override CFLAGS += -I../../libselinux/include -DVERSION=\"$(VERSION)\" -DUSE_NLS -DLOCALEDIR="\"$(LOCALEDIR)\"" -DPACKAGE="\"policycoreutils\""
+override LDFLAGS+= -L../../libselinux/src
+override LDLIBS += $(LIBSELINUX_LDLIBS)
 ifeq ($(PAMH), y)
 	override CFLAGS += -DUSE_PAM
 	EXTRA_OBJS += hashtab.o
@@ -86,8 +87,18 @@ endif
 clean:
 	rm -f newrole *.o 
 
-indent:
-	../../scripts/Lindent $(wildcard *.[ch])
-
 relabel: install
 	/sbin/restorecon $(DESTDIR)$(BINDIR)/newrole
+
+test-build-options:
+	$(MAKE) PAMH=y AUDITH=y AUDIT_LOG_PRIV=y NAMESPACE_PRIV=y clean newrole
+	$(MAKE) PAMH=y AUDITH=y AUDIT_LOG_PRIV=y NAMESPACE_PRIV=n clean newrole
+	$(MAKE) PAMH=y AUDITH=y AUDIT_LOG_PRIV=n NAMESPACE_PRIV=y clean newrole
+	$(MAKE) PAMH=y AUDITH=y AUDIT_LOG_PRIV=n NAMESPACE_PRIV=n clean newrole
+	$(MAKE) PAMH=y AUDITH=y AUDIT_LOG_PRIV=y NAMESPACE_PRIV=y clean newrole
+	$(MAKE) PAMH=y AUDITH=n AUDIT_LOG_PRIV=n NAMESPACE_PRIV=y clean newrole
+	$(MAKE) PAMH=y AUDITH=n AUDIT_LOG_PRIV=n NAMESPACE_PRIV=n clean newrole
+	$(MAKE) PAMH=n AUDITH=y AUDIT_LOG_PRIV=y NAMESPACE_PRIV=n clean newrole
+	$(MAKE) PAMH=n AUDITH=y AUDIT_LOG_PRIV=n NAMESPACE_PRIV=n clean newrole
+	$(MAKE) PAMH=n AUDITH=n AUDIT_LOG_PRIV=n NAMESPACE_PRIV=n clean newrole
+	$(MAKE) clean

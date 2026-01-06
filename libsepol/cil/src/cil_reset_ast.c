@@ -2,6 +2,7 @@
 #include "cil_internal.h"
 #include "cil_log.h"
 #include "cil_list.h"
+#include "cil_reset_ast.h"
 #include "cil_symtab.h"
 
 static inline void cil_reset_classperms_list(struct cil_list *cp_list);
@@ -9,6 +10,12 @@ static inline void cil_reset_level(struct cil_level *level);
 static inline void cil_reset_levelrange(struct cil_levelrange *levelrange);
 static inline void cil_reset_context(struct cil_context *context);
 
+
+static void cil_reset_ordered(struct cil_ordered *ordered)
+{
+	ordered->merged = CIL_FALSE;
+	cil_list_destroy(&ordered->datums, CIL_FALSE);
+}
 
 static int __class_reset_perm_values(__attribute__((unused)) hashtab_key_t k, hashtab_datum_t d, void *args)
 {
@@ -22,11 +29,12 @@ static int __class_reset_perm_values(__attribute__((unused)) hashtab_key_t k, ha
 static void cil_reset_class(struct cil_class *class)
 {
 	if (class->common != NULL) {
-		struct cil_class *common = class->common;
-		cil_symtab_map(&class->perms, __class_reset_perm_values, &common->num_perms);
+		/* Must assume that the common has been destroyed */
+		int num_common_perms = class->num_perms - class->perms.nprim;
+		cil_symtab_map(&class->perms, __class_reset_perm_values, &num_common_perms);
 		/* during a re-resolve, we need to reset the common, so a classcommon
 		 * statement isn't seen as a duplicate */
-		class->num_perms -= common->num_perms;
+		class->num_perms = class->perms.nprim;
 		class->common = NULL; /* Must make this NULL or there will be an error when re-resolving */
 	}
 	class->ordered = CIL_FALSE;
@@ -34,7 +42,7 @@ static void cil_reset_class(struct cil_class *class)
 
 static void cil_reset_perm(struct cil_perm *perm)
 {
-	cil_reset_classperms_list(perm->classperms);
+	cil_list_destroy(&perm->classperms, CIL_FALSE);
 }
 
 static inline void cil_reset_classperms(struct cil_classperms *cp)
@@ -43,6 +51,7 @@ static inline void cil_reset_classperms(struct cil_classperms *cp)
 		return;
 	}
 
+	cp->class = NULL;
 	cil_list_destroy(&cp->perms, CIL_FALSE);
 }
 
@@ -52,12 +61,20 @@ static void cil_reset_classpermission(struct cil_classpermission *cp)
 		return;
 	}
 
-	cil_reset_classperms_list(cp->classperms);
+	cil_list_destroy(&cp->classperms, CIL_FALSE);
 }
 
 static void cil_reset_classperms_set(struct cil_classperms_set *cp_set)
 {
-	cil_reset_classpermission(cp_set->set);
+	if (cp_set == NULL || cp_set->set == NULL) {
+		return;
+	}
+
+	if (cp_set->set->datum.name == NULL) {
+		cil_reset_classperms_list(cp_set->set->classperms);
+	}
+
+	cp_set->set = NULL;
 }
 
 static inline void cil_reset_classperms_list(struct cil_list *cp_list)
@@ -129,8 +146,11 @@ static void cil_reset_userattributeset(struct cil_userattributeset *uas)
 
 static void cil_reset_selinuxuser(struct cil_selinuxuser *selinuxuser)
 {
+	selinuxuser->user = NULL;
 	if (selinuxuser->range_str == NULL) {
 		cil_reset_levelrange(selinuxuser->range);
+	} else {
+		selinuxuser->range = NULL;
 	}
 }
 
@@ -194,15 +214,27 @@ static void cil_reset_typeattributeset(struct cil_typeattributeset *tas)
 	cil_list_destroy(&tas->datum_expr, CIL_FALSE);
 }
 
+static void cil_reset_expandtypeattribute(struct cil_expandtypeattribute *expandattr)
+{
+	cil_list_destroy(&expandattr->attr_datums, CIL_FALSE);
+}
+
 static void cil_reset_avrule(struct cil_avrule *rule)
 {
 	cil_reset_classperms_list(rule->perms.classperms);
+}
+
+static void cil_reset_deny_rule(struct cil_deny_rule *rule)
+{
+	cil_reset_classperms_list(rule->classperms);
 }
 
 static void cil_reset_rangetransition(struct cil_rangetransition *rangetrans)
 {
 	if (rangetrans->range_str == NULL) {
 		cil_reset_levelrange(rangetrans->range);
+	} else {
+		rangetrans->range = NULL;
 	}
 }
 
@@ -240,6 +272,7 @@ static void cil_reset_catset(struct cil_catset *catset)
 
 static inline void cil_reset_level(struct cil_level *level)
 {
+	level->sens = NULL;
 	cil_reset_cats(level->cats);
 }
 
@@ -247,10 +280,14 @@ static inline void cil_reset_levelrange(struct cil_levelrange *levelrange)
 {
 	if (levelrange->low_str == NULL) {
 		cil_reset_level(levelrange->low);
+	} else {
+		levelrange->low = NULL;
 	}
 
 	if (levelrange->high_str == NULL) {
 		cil_reset_level(levelrange->high);
+	} else {
+		levelrange->high = NULL;
 	}
 }
 
@@ -258,6 +295,8 @@ static inline void cil_reset_userlevel(struct cil_userlevel *userlevel)
 {
 	if (userlevel->level_str == NULL) {
 		cil_reset_level(userlevel->level);
+	} else {
+		userlevel->level = NULL;
 	}
 }
 
@@ -265,13 +304,20 @@ static inline void cil_reset_userrange(struct cil_userrange *userrange)
 {
 	if (userrange->range_str == NULL) {
 		cil_reset_levelrange(userrange->range);
+	} else {
+		userrange->range = NULL;
 	}
 }
 
 static inline void cil_reset_context(struct cil_context *context)
 {
+	if (!context) {
+		return;
+	}
 	if (context->range_str == NULL) {
 		cil_reset_levelrange(context->range);
+	} else {
+		context->range = NULL;
 	}
 }
 
@@ -279,26 +325,35 @@ static void cil_reset_sidcontext(struct cil_sidcontext *sidcontext)
 {
 	if (sidcontext->context_str == NULL) {
 		cil_reset_context(sidcontext->context);
+	} else {
+		sidcontext->context = NULL;
 	}
 }
 
 static void cil_reset_filecon(struct cil_filecon *filecon)
 {
-	if (filecon->context_str == NULL && filecon->context != NULL) {
+	if (filecon->context_str == NULL) {
 		cil_reset_context(filecon->context);
+	} else {
+		filecon->context = NULL;
 	}
 }
 
 static void cil_reset_ibpkeycon(struct cil_ibpkeycon *ibpkeycon)
 {
-	if (!ibpkeycon->context_str)
+	if (ibpkeycon->context_str == NULL) {
 		cil_reset_context(ibpkeycon->context);
+	} else {
+		ibpkeycon->context = NULL;
+	}
 }
 
 static void cil_reset_portcon(struct cil_portcon *portcon)
 {
 	if (portcon->context_str == NULL) {
 		cil_reset_context(portcon->context);
+	} else {
+		portcon->context = NULL;
 	}
 }
 
@@ -306,6 +361,8 @@ static void cil_reset_nodecon(struct cil_nodecon *nodecon)
 {
 	if (nodecon->context_str == NULL) {
 		cil_reset_context(nodecon->context);
+	} else {
+		nodecon->context = NULL;
 	}
 }
 
@@ -313,6 +370,8 @@ static void cil_reset_genfscon(struct cil_genfscon *genfscon)
 {
 	if (genfscon->context_str == NULL) {
 		cil_reset_context(genfscon->context);
+	} else {
+		genfscon->context = NULL;
 	}
 }
 
@@ -320,17 +379,23 @@ static void cil_reset_netifcon(struct cil_netifcon *netifcon)
 {
 	if (netifcon->if_context_str == NULL) {
 		cil_reset_context(netifcon->if_context);
+	} else {
+		netifcon->if_context = NULL;
 	}
 
 	if (netifcon->packet_context_str == NULL) {
 		cil_reset_context(netifcon->packet_context);
+	} else {
+		netifcon->packet_context = NULL;
 	}
 }
 
 static void cil_reset_ibendportcon(struct cil_ibendportcon *ibendportcon)
 {
-	if (!ibendportcon->context_str) {
+	if (ibendportcon->context_str == NULL) {
 		cil_reset_context(ibendportcon->context);
+	} else {
+		ibendportcon->context = NULL;
 	}
 }
 
@@ -338,6 +403,8 @@ static void cil_reset_pirqcon(struct cil_pirqcon *pirqcon)
 {
 	if (pirqcon->context_str == NULL) {
 		cil_reset_context(pirqcon->context);
+	} else {
+		pirqcon->context = NULL;
 	}
 }
 
@@ -345,6 +412,8 @@ static void cil_reset_iomemcon(struct cil_iomemcon *iomemcon)
 {
 	if (iomemcon->context_str == NULL) {
 		cil_reset_context(iomemcon->context);
+	} else {
+		iomemcon->context = NULL;
 	}
 }
 
@@ -352,6 +421,8 @@ static void cil_reset_ioportcon(struct cil_ioportcon *ioportcon)
 {
 	if (ioportcon->context_str == NULL) {
 		cil_reset_context(ioportcon->context);
+	} else {
+		ioportcon->context = NULL;
 	}
 }
 
@@ -359,6 +430,8 @@ static void cil_reset_pcidevicecon(struct cil_pcidevicecon *pcidevicecon)
 {
 	if (pcidevicecon->context_str == NULL) {
 		cil_reset_context(pcidevicecon->context);
+	} else {
+		pcidevicecon->context = NULL;
 	}
 }
 
@@ -366,6 +439,8 @@ static void cil_reset_devicetreecon(struct cil_devicetreecon *devicetreecon)
 {
 	if (devicetreecon->context_str == NULL) {
 		cil_reset_context(devicetreecon->context);
+	} else {
+		devicetreecon->context = NULL;
 	}
 }
 
@@ -373,6 +448,8 @@ static void cil_reset_fsuse(struct cil_fsuse *fsuse)
 {
 	if (fsuse->context_str == NULL) {
 		cil_reset_context(fsuse->context);
+	} else {
+		fsuse->context = NULL;
 	}
 }
 
@@ -409,7 +486,7 @@ static void cil_reset_booleanif(struct cil_booleanif *bif)
 	cil_list_destroy(&bif->datum_expr, CIL_FALSE);
 }
 
-int __cil_reset_node(struct cil_tree_node *node,  __attribute__((unused)) uint32_t *finished, __attribute__((unused)) void *extra_args)
+static int __cil_reset_node(struct cil_tree_node *node,  __attribute__((unused)) uint32_t *finished, __attribute__((unused)) void *extra_args)
 {
 	switch (node->flavor) {
 	case CIL_CLASS:
@@ -470,11 +547,17 @@ int __cil_reset_node(struct cil_tree_node *node,  __attribute__((unused)) uint32
 	case CIL_TYPEATTRIBUTESET:
 		cil_reset_typeattributeset(node->data);
 		break;
+	case CIL_EXPANDTYPEATTRIBUTE:
+		cil_reset_expandtypeattribute(node->data);
+		break;
 	case CIL_RANGETRANSITION:
 		cil_reset_rangetransition(node->data);
 		break;
 	case CIL_AVRULE:
 		cil_reset_avrule(node->data);
+		break;
+	case CIL_DENY_RULE:
+		cil_reset_deny_rule(node->data);
 		break;
 	case CIL_SENS:
 		cil_reset_sens(node->data);
@@ -561,15 +644,16 @@ int __cil_reset_node(struct cil_tree_node *node,  __attribute__((unused)) uint32
 	case CIL_BOOLEANIF:
 		cil_reset_booleanif(node->data);
 		break;
-	case CIL_TUNABLEIF:
-	case CIL_CALL:
-		break; /* Not effected by optional block disabling */
-	case CIL_MACRO:
 	case CIL_SIDORDER:
 	case CIL_CLASSORDER:
 	case CIL_CATORDER:
 	case CIL_SENSITIVITYORDER:
-	case CIL_EXPANDTYPEATTRIBUTE:
+		cil_reset_ordered(node->data);
+		break;
+	case CIL_TUNABLEIF:
+	case CIL_CALL:
+		break; /* Not effected by optional block disabling */
+	case CIL_MACRO:
 		break; /* Nothing to reset */
 	default:
 		break;

@@ -21,7 +21,7 @@ typedef struct dbase_file dbase_t;
 #include "handle.h"
 
 static int user_extra_print(semanage_handle_t * handle,
-			    semanage_user_extra_t * user_extra, FILE * str)
+			    const semanage_user_extra_t * user_extra, FILE * str)
 {
 
 	const char *name = semanage_user_extra_get_name(user_extra);
@@ -57,7 +57,7 @@ static int user_extra_parse(semanage_handle_t * handle,
 		goto err;
 
 	/* Extract name */
-	if (parse_fetch_string(handle, info, &str, ' ') < 0)
+	if (parse_fetch_string(handle, info, &str, ' ', 0) < 0)
 		goto err;
 	if (semanage_user_extra_set_name(handle, user_extra, str) < 0)
 		goto err;
@@ -73,7 +73,7 @@ static int user_extra_parse(semanage_handle_t * handle,
 		goto err;
 
 	/* Extract prefix */
-	if (parse_fetch_string(handle, info, &str, ';') < 0)
+	if (parse_fetch_string(handle, info, &str, ';', 1) < 0)
 		goto err;
 	if (semanage_user_extra_set_prefix(handle, user_extra, str) < 0)
 		goto err;
@@ -100,7 +100,7 @@ static int user_extra_parse(semanage_handle_t * handle,
 }
 
 /* USER EXTRA RECORD: FILE extension: method table */
-record_file_table_t SEMANAGE_USER_EXTRA_FILE_RTABLE = {
+static const record_file_table_t SEMANAGE_USER_EXTRA_FILE_RTABLE = {
 	.parse = user_extra_parse,
 	.print = user_extra_print,
 };

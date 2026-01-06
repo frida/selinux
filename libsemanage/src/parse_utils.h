@@ -45,12 +45,12 @@ extern int parse_assert_noeof(semanage_handle_t * handle, parse_info_t * info);
  * otherwise eat the whitespace */
 extern int parse_assert_space(semanage_handle_t * handle, parse_info_t * info);
 
-/* Throw an error if the specified character 
+/* Throw an error if the specified character
  * does not follow, otherwise eat that character */
 extern int parse_assert_ch(semanage_handle_t * handle,
-			   parse_info_t * info, const char ch);
+			   parse_info_t * info, char ch);
 
-/* Throw an error if the specified string 
+/* Throw an error if the specified string
  * does not follow is not found, otherwise
  * eat the string */
 extern int parse_assert_str(semanage_handle_t * handle,
@@ -58,7 +58,7 @@ extern int parse_assert_str(semanage_handle_t * handle,
 
 /* Eat the optional character, if found,
  * or return STATUS_NODATA */
-extern int parse_optional_ch(parse_info_t * info, const char ch);
+extern int parse_optional_ch(parse_info_t * info, char ch);
 
 /* Eat the optional string, if found,
  * or return STATUS_NODATA */
@@ -71,12 +71,11 @@ extern int parse_optional_str(parse_info_t * info, const char *str);
 int parse_fetch_int(semanage_handle_t * hgandle,
 		    parse_info_t * info, int *num, char delim);
 
-/* Extract the next string (delimited by 
- * whitespace), and move the read pointer past it.
- * Stop of the optional character delim is encountered,
- * or if whitespace/eof is encountered. Fail if the
- * string is of length 0. */
+/* Extract the next string and move the read pointer past it.
+ * Stop if the optional character delim (or eof) is encountered,
+ * or if whitespace is encountered and allow_spaces is 0.
+ * Fail if the string is of length 0. */
 extern int parse_fetch_string(semanage_handle_t * handle,
-			      parse_info_t * info, char **str_ptr, char delim);
+			      parse_info_t * info, char **str_ptr, char delim, int allow_spaces);
 
 #endif

@@ -1,5 +1,5 @@
 # Installation directories.
-LINGUAS ?= ru
+LINGUAS ?=
 PREFIX	?= /usr
 MANDIR ?=  $(PREFIX)/share/man
 MAN3SUBDIR ?= man3
@@ -35,4 +35,4 @@ install: all
 
 relabel:
 
-indent distclean clean:
+format distclean clean:

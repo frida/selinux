@@ -20,11 +20,11 @@ extern "C" {
  */
 struct security_id {
 	char * ctx;
-	unsigned int refcnt;
+	unsigned int id;
 };
 typedef struct security_id *security_id_t;
 
-#define SECSID_WILD (security_id_t)NULL	/* unspecified SID */
+#define SECSID_WILD ((security_id_t)NULL)	/* unspecified SID */
 
 /**
  * avc_sid_to_context - get copy of context corresponding to SID.
@@ -215,7 +215,7 @@ extern int avc_init(const char *msgprefix,
  * is set to "avc" and any callbacks desired should be specified via
  * selinux_set_callback().  Available options are listed above.
  */
-extern int avc_open(struct selinux_opt *opts, unsigned nopts);
+extern int avc_open(const struct selinux_opt *opts, unsigned nopts);
 
 /**
  * avc_cleanup - Remove unused SIDs and AVC entries.

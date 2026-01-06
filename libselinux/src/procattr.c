@@ -1,9 +1,11 @@
+#include <assert.h>
 #include <sys/syscall.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <pthread.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <errno.h>
 #include "selinux_internal.h"
@@ -11,11 +13,14 @@
 
 #define UNSET (char *) -1
 
+/* Cached values so that when a thread calls set*con() then gen*con(), the value
+ * which was set is directly returned.
+ */
 static __thread char *prev_current = UNSET;
-static __thread char * prev_exec = UNSET;
-static __thread char * prev_fscreate = UNSET;
-static __thread char * prev_keycreate = UNSET;
-static __thread char * prev_sockcreate = UNSET;
+static __thread char *prev_exec = UNSET;
+static __thread char *prev_fscreate = UNSET;
+static __thread char *prev_keycreate = UNSET;
+static __thread char *prev_sockcreate = UNSET;
 
 static pthread_once_t once = PTHREAD_ONCE_INIT;
 static pthread_key_t destructor_key;
@@ -25,21 +30,23 @@ static __thread char destructor_initialized;
 /* Bionic and glibc >= 2.30 declare gettid() system call wrapper in unistd.h and
  * has a definition for it */
 #ifdef __BIONIC__
-  #define OVERRIDE_GETTID 0
+  #define HAVE_GETTID 1
 #elif !defined(__GLIBC_PREREQ)
-  #define OVERRIDE_GETTID 1
+  #define HAVE_GETTID 0
 #elif !__GLIBC_PREREQ(2,30)
-  #define OVERRIDE_GETTID 1
+  #define HAVE_GETTID 0
 #else
-  #define OVERRIDE_GETTID 0
+  #define HAVE_GETTID 1
 #endif
 
-#if OVERRIDE_GETTID
-static pid_t gettid(void)
+static pid_t selinux_gettid(void)
 {
+#if HAVE_GETTID
+	return gettid();
+#else
 	return syscall(__NR_gettid);
-}
 #endif
+}
 
 static void procattr_thread_destructor(void __attribute__((unused)) *unused)
 {
@@ -66,7 +73,7 @@ void  __attribute__((destructor)) procattr_destructor(void)
 static inline void init_thread_destructor(void)
 {
 	if (destructor_initialized == 0) {
-		__selinux_setspecific(destructor_key, (void *)1);
+		__selinux_setspecific(destructor_key, /* some valid address to please GCC */ &selinux_page_size);
 		destructor_initialized = 1;
 	}
 }
@@ -81,70 +88,47 @@ static void init_procattr(void)
 static int openattr(pid_t pid, const char *attr, int flags)
 {
 	int fd, rc;
-	char *path;
+	char path[44];  /* must hold "/proc/self/task/%d/attr/sockcreate" */
 	pid_t tid;
 
+	static_assert(sizeof(pid_t) <= sizeof(uint32_t), "content written to path might get truncated");
+
 	if (pid > 0) {
-		rc = asprintf(&path, "/proc/%d/attr/%s", pid, attr);
+		rc = snprintf(path, sizeof(path), "/proc/%d/attr/%s", pid, attr);
 	} else if (pid == 0) {
-		rc = asprintf(&path, "/proc/thread-self/attr/%s", attr);
-		if (rc < 0)
+		rc = snprintf(path, sizeof(path), "/proc/thread-self/attr/%s", attr);
+		if (rc < 0 || (size_t)rc >= sizeof(path)) {
+			errno = EOVERFLOW;
 			return -1;
+		}
 		fd = open(path, flags | O_CLOEXEC);
 		if (fd >= 0 || errno != ENOENT)
-			goto out;
-		free(path);
-		tid = gettid();
-		rc = asprintf(&path, "/proc/self/task/%d/attr/%s", tid, attr);
+			return fd;
+		tid = selinux_gettid();
+		rc = snprintf(path, sizeof(path), "/proc/self/task/%d/attr/%s", tid, attr);
 	} else {
 		errno = EINVAL;
 		return -1;
 	}
-	if (rc < 0)
+	if (rc < 0 || (size_t)rc >= sizeof(path)) {
+		errno = EOVERFLOW;
 		return -1;
+	}
 
-	fd = open(path, flags | O_CLOEXEC);
-out:
-	free(path);
-	return fd;
+	return open(path, flags | O_CLOEXEC);
 }
 
-static int getprocattrcon_raw(char ** context,
-			      pid_t pid, const char *attr)
+static int getprocattrcon_raw(char **context, pid_t pid, const char *attr,
+			      const char *prev_context)
 {
 	char *buf;
 	size_t size;
 	int fd;
 	ssize_t ret;
 	int errno_hold;
-	char * prev_context;
 
 	__selinux_once(once, init_procattr);
 	init_thread_destructor();
-
-	switch (attr[0]) {
-		case 'c':
-			prev_context = prev_current;
-			break;
-		case 'e':
-			prev_context = prev_exec;
-			break;
-		case 'f':
-			prev_context = prev_fscreate;
-			break;
-		case 'k':
-			prev_context = prev_keycreate;
-			break;
-		case 's':
-			prev_context = prev_sockcreate;
-			break;
-		case 'p':
-			prev_context = NULL;
-			break;
-		default:
-			errno = ENOENT;
-			return -1;
-	};
 
 	if (prev_context && prev_context != UNSET) {
 		*context = strdup(prev_context);
@@ -159,46 +143,44 @@ static int getprocattrcon_raw(char ** context,
 		return -1;
 
 	size = selinux_page_size;
-	buf = malloc(size);
+	buf = calloc(1, size);
 	if (!buf) {
 		ret = -1;
 		goto out;
 	}
-	memset(buf, 0, size);
 
 	do {
 		ret = read(fd, buf, size - 1);
 	} while (ret < 0 && errno == EINTR);
 	if (ret < 0)
-		goto out2;
+		goto out;
 
 	if (ret == 0) {
 		*context = NULL;
-		goto out2;
+		goto out;
 	}
 
 	*context = strdup(buf);
 	if (!(*context)) {
 		ret = -1;
-		goto out2;
+		goto out;
 	}
 	ret = 0;
-      out2:
-	free(buf);
       out:
+	free(buf);
 	errno_hold = errno;
 	close(fd);
 	errno = errno_hold;
 	return ret;
 }
 
-static int getprocattrcon(char ** context,
-			  pid_t pid, const char *attr)
+static int getprocattrcon(char **context, pid_t pid, const char *attr,
+			  const char *prev_context)
 {
 	int ret;
 	char * rcontext;
 
-	ret = getprocattrcon_raw(&rcontext, pid, attr);
+	ret = getprocattrcon_raw(&rcontext, pid, attr, prev_context);
 
 	if (!ret) {
 		ret = selinux_raw_to_trans_context(rcontext, context);
@@ -208,37 +190,16 @@ static int getprocattrcon(char ** context,
 	return ret;
 }
 
-static int setprocattrcon_raw(const char * context,
-			      pid_t pid, const char *attr)
+static int setprocattrcon_raw(const char *context, const char *attr,
+			      char **prev_context)
 {
 	int fd;
 	ssize_t ret;
 	int errno_hold;
-	char **prev_context, *context2 = NULL;
+	char *context2 = NULL;
 
 	__selinux_once(once, init_procattr);
 	init_thread_destructor();
-
-	switch (attr[0]) {
-		case 'c':
-			prev_context = &prev_current;
-			break;
-		case 'e':
-			prev_context = &prev_exec;
-			break;
-		case 'f':
-			prev_context = &prev_fscreate;
-			break;
-		case 'k':
-			prev_context = &prev_keycreate;
-			break;
-		case 's':
-			prev_context = &prev_sockcreate;
-			break;
-		default:
-			errno = ENOENT;
-			return -1;
-	};
 
 	if (!context && !*prev_context)
 		return 0;
@@ -246,7 +207,7 @@ static int setprocattrcon_raw(const char * context,
 	    && !strcmp(context, *prev_context))
 		return 0;
 
-	fd = openattr(pid, attr, O_RDWR | O_CLOEXEC);
+	fd = openattr(0, attr, O_RDWR | O_CLOEXEC);
 	if (fd < 0)
 		return -1;
 	if (context) {
@@ -277,8 +238,8 @@ out:
 	}
 }
 
-static int setprocattrcon(const char * context,
-			  pid_t pid, const char *attr)
+static int setprocattrcon(const char *context, const char *attr,
+			  char **prev_context)
 {
 	int ret;
 	char * rcontext;
@@ -286,62 +247,76 @@ static int setprocattrcon(const char * context,
 	if (selinux_trans_to_raw_context(context, &rcontext))
 		return -1;
 
-	ret = setprocattrcon_raw(rcontext, pid, attr);
+	ret = setprocattrcon_raw(rcontext, attr, prev_context);
 
 	freecon(rcontext);
 
 	return ret;
 }
 
-#define getselfattr_def(fn, attr) \
+#define getselfattr_def(fn, attr, prev_context) \
 	int get##fn##_raw(char **c) \
 	{ \
-		return getprocattrcon_raw(c, 0, #attr); \
+		return getprocattrcon_raw(c, 0, attr, prev_context); \
 	} \
 	int get##fn(char **c) \
 	{ \
-		return getprocattrcon(c, 0, #attr); \
+		return getprocattrcon(c, 0, attr, prev_context); \
 	}
 
-#define setselfattr_def(fn, attr) \
+#define setselfattr_def(fn, attr, prev_context) \
 	int set##fn##_raw(const char * c) \
 	{ \
-		return setprocattrcon_raw(c, 0, #attr); \
+		return setprocattrcon_raw(c, attr, &prev_context); \
 	} \
 	int set##fn(const char * c) \
 	{ \
-		return setprocattrcon(c, 0, #attr); \
+		return setprocattrcon(c, attr, &prev_context); \
 	}
 
-#define all_selfattr_def(fn, attr) \
-	getselfattr_def(fn, attr)	 \
-	setselfattr_def(fn, attr)
+#define all_selfattr_def(fn, attr, prev_context) \
+	getselfattr_def(fn, attr, prev_context)	 \
+	setselfattr_def(fn, attr, prev_context)
 
-#define getpidattr_def(fn, attr) \
-	int get##fn##_raw(pid_t pid, char **c)	\
-	{ \
-		if (pid <= 0) { \
-			errno = EINVAL; \
-			return -1; \
-		} else { \
-			return getprocattrcon_raw(c, pid, #attr); \
-		} \
-	} \
-	int get##fn(pid_t pid, char **c)	\
-	{ \
-		if (pid <= 0) { \
-			errno = EINVAL; \
-			return -1; \
-		} else { \
-			return getprocattrcon(c, pid, #attr); \
-		} \
+all_selfattr_def(con, "current", prev_current)
+    getselfattr_def(prevcon, "prev", NULL)
+    all_selfattr_def(execcon, "exec", prev_exec)
+    all_selfattr_def(fscreatecon, "fscreate", prev_fscreate)
+    all_selfattr_def(sockcreatecon, "sockcreate", prev_sockcreate)
+    all_selfattr_def(keycreatecon, "keycreate", prev_keycreate)
+
+int getpidcon_raw(pid_t pid, char **c)
+{
+	if (pid <= 0) {
+		errno = EINVAL;
+		return -1;
 	}
+	return getprocattrcon_raw(c, pid, "current", NULL);
+}
 
-all_selfattr_def(con, current)
-    getpidattr_def(pidcon, current)
-    getselfattr_def(prevcon, prev)
-    all_selfattr_def(execcon, exec)
-    all_selfattr_def(fscreatecon, fscreate)
-    all_selfattr_def(sockcreatecon, sockcreate)
-    all_selfattr_def(keycreatecon, keycreate)
+int getpidcon(pid_t pid, char **c)
+{
+	if (pid <= 0) {
+		errno = EINVAL;
+		return -1;
+	}
+	return getprocattrcon(c, pid, "current", NULL);
+}
 
+int getpidprevcon_raw(pid_t pid, char **c)
+{
+        if (pid <= 0) {
+                errno = EINVAL;
+                return -1;
+        }
+        return getprocattrcon_raw(c, pid, "prev", NULL);
+}
+
+int getpidprevcon(pid_t pid, char **c)
+{
+        if (pid <= 0) {
+                errno = EINVAL;
+                return -1;
+        }
+        return getprocattrcon(c, pid, "prev", NULL);
+}

@@ -8,25 +8,25 @@ errors = 0
 
 
 def untrans(trans, val):
-    global errors, verbose
+    global errors
     (rc, raw) = selinux.selinux_trans_to_raw_context(trans)
     if raw != val:
         print("untrans: '%s' -> '%s' != '%s' FAILED" % (trans, raw, val))
         errors += 1
     else:
         if verbose:
-            print("untrans: %s -> %s != %s SUCCESS" % (trans, raw, val))
+            print("untrans: '%s' -> '%s' == '%s' SUCCESS" % (trans, raw, val))
 
 
 def trans(raw, val):
-    global errors, verbose
+    global errors
     (rc, trans) = selinux.selinux_raw_to_trans_context(raw)
     if trans != val:
         print("trans: '%s' -> '%s' != '%s' FAILED" % (raw, trans, val))
         errors += 1
     else:
         if verbose:
-            print("trans: %s -> %s != %s SUCCESS" % (raw, trans, val))
+            print("trans: '%s' -> '%s' == '%s' SUCCESS" % (raw, trans, val))
 
 
 if len(sys.argv) > 1 and sys.argv[1] == "-v":

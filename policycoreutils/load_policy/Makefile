@@ -1,13 +1,13 @@
 # Installation directories.
-LINGUAS ?= ru
+LINGUAS ?=
 PREFIX ?= /usr
 SBINDIR ?= $(PREFIX)/sbin
 MANDIR ?= $(PREFIX)/share/man
 LOCALEDIR ?= $(DESTDIR)$(PREFIX)/share/locale
 
 CFLAGS ?= -Werror -Wall -W
-override CFLAGS += $(LDFLAGS) -DUSE_NLS -DLOCALEDIR="\"$(LOCALEDIR)\"" -DPACKAGE="\"policycoreutils\""
-override LDLIBS += -lsepol -lselinux
+override CFLAGS += $(LDFLAGS) -I../../libselinux/include -L../../libselinux/src -DUSE_NLS -DLOCALEDIR="\"$(LOCALEDIR)\"" -DPACKAGE="\"policycoreutils\""
+override LDLIBS += $(LIBSELINUX_LDLIBS) -lsepol
 
 TARGETS=$(patsubst %.c,%,$(sort $(wildcard *.c)))
 
@@ -27,9 +27,6 @@ install: all
 
 clean:
 	-rm -f $(TARGETS) *.o 
-
-indent:
-	../../scripts/Lindent $(wildcard *.[ch])
 
 relabel:
 	/sbin/restorecon $(DESTDIR)$(SBINDIR)/load_policy 

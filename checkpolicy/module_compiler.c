@@ -21,20 +21,14 @@
 #include "queue.h"
 #include "module_compiler.h"
 
-union stack_item_u {
-	avrule_block_t *avrule;
-	cond_list_t *cond_list;
-};
-
 typedef struct scope_stack {
-	union stack_item_u u;
-	int type;		/* for above union: 1 = avrule block, 2 = conditional */
+	int type;		/* 1 = avrule block, 2 = conditional */
 	avrule_decl_t *decl;	/* if in an avrule block, which
 				 * declaration is current */
 	avrule_t *last_avrule;
 	int in_else;		/* if in an avrule block, within ELSE branch */
 	int require_given;	/* 1 if this block had at least one require */
-	struct scope_stack *parent, *child;
+	struct scope_stack *parent;
 } scope_stack_t;
 
 extern policydb_t *policydbp;
@@ -75,7 +69,7 @@ static void print_error_msg(int ret, uint32_t symbol_type)
 		yyerror2("Could not declare %s here", flavor_str[symbol_type]);
 		break;
 	default:
-		yyerror("Unknown error");
+		yyerror2("Unknown error %d", ret);
 	}
 }
 
@@ -86,7 +80,7 @@ int define_policy(int pass, int module_header_given)
 	if (module_header_given) {
 		if (policydbp->policy_type != POLICY_MOD) {
 			yyerror
-			    ("Module specification found while not building a policy module.\n");
+			    ("Module specification found while not building a policy module.");
 			return -1;
 		}
 
@@ -99,6 +93,7 @@ int define_policy(int pass, int module_header_given)
 				yyerror("no module name");
 				return -1;
 			}
+			free(policydbp->name);
 			policydbp->name = id;
 			if ((policydbp->version =
 			     queue_remove(id_queue)) == NULL) {
@@ -110,7 +105,7 @@ int define_policy(int pass, int module_header_given)
 	} else {
 		if (policydbp->policy_type == POLICY_MOD) {
 			yyerror
-			    ("Building a policy module, but no module specification found.\n");
+			    ("Building a policy module, but no module specification found.");
 			return -1;
 		}
 	}
@@ -165,7 +160,7 @@ static int create_symbol(uint32_t symbol_type, hashtab_key_t key, hashtab_datum_
 			    decl->decl_id, dest_value);
 
 	if (ret == 1 && dest_value) {
-		symtab_datum_t *s =
+		hashtab_datum_t s =
 			hashtab_search(policydbp->symtab[symbol_type].table,
 				       key);
 		assert(s != NULL);
@@ -173,7 +168,7 @@ static int create_symbol(uint32_t symbol_type, hashtab_key_t key, hashtab_datum_
 		if (symbol_type == SYM_LEVELS) {
 			*dest_value = ((level_datum_t *)s)->level->sens;
 		} else {
-			*dest_value = s->value;
+			*dest_value = ((symtab_datum_t *)s)->value;
 		}
 	} else if (ret == -2) {
 		return -2;
@@ -195,7 +190,7 @@ static int create_symbol(uint32_t symbol_type, hashtab_key_t key, hashtab_datum_
  * not be restricted pointers. */
 int declare_symbol(uint32_t symbol_type,
 		   hashtab_key_t key, hashtab_datum_t datum,
-		   uint32_t * dest_value, uint32_t * datum_value)
+		   uint32_t * dest_value, const uint32_t * datum_value)
 {
 	avrule_decl_t *decl = stack_top->decl;
 	int ret = create_symbol(symbol_type, key, datum, dest_value, SCOPE_DECL);
@@ -212,8 +207,7 @@ int declare_symbol(uint32_t symbol_type,
 	return ret;
 }
 
-static int role_implicit_bounds(hashtab_t roles_tab,
-				char *role_id, role_datum_t *role)
+static int role_implicit_bounds(hashtab_t roles_tab, char *role_id, role_datum_t *role)
 {
 	role_datum_t *bounds;
 	char *bounds_id, *delim;
@@ -231,19 +225,13 @@ static int role_implicit_bounds(hashtab_t roles_tab,
 
 	bounds = hashtab_search(roles_tab, bounds_id);
 	if (!bounds) {
-		yyerror2("role %s doesn't exist, is implicit bounds of %s",
-			 bounds_id, role_id);
+		yyerror2("Implicit role bounds declared (%s), but the parent (%s) was not found in the same scope", role_id, bounds_id);
+		free(bounds_id);
 		return -1;
 	}
 
-	if (!role->bounds)
-		role->bounds = bounds->s.value;
-	else if (role->bounds != bounds->s.value) {
-		yyerror2("role %s has inconsistent bounds %s/%s",
-			 role_id, bounds_id,
-			 policydbp->p_role_val_to_name[role->bounds - 1]);
-		return -1;
-	}
+	role->bounds = bounds->s.value;
+
 	free(bounds_id);
 
 	return 0;
@@ -281,9 +269,8 @@ static int create_role(uint32_t scope, unsigned char isattr, role_datum_t **role
 		ret = require_symbol(SYM_ROLES, id, datum, &value, &value);
 	}
 
-	datum->s.value = value;
-
 	if (ret == 0) {
+		datum->s.value = value;
 		*role = datum;
 		*key = strdup(id);
 		if (*key == NULL) {
@@ -295,11 +282,13 @@ static int create_role(uint32_t scope, unsigned char isattr, role_datum_t **role
 		if (*role && (isattr != (*role)->flavor)) {
 			yyerror2("Identifier %s used as both an attribute and a role",
 				 id);
+			*role = NULL;
 			free(id);
 			role_datum_destroy(datum);
 			free(datum);
 			return -1;
 		}
+		datum->s.value = value;
 		*role = datum;
 		*key = id;
 	} else {
@@ -431,6 +420,7 @@ static int create_type(uint32_t scope, unsigned char isattr, type_datum_t **type
 		if (*type && (isattr != (*type)->flavor)) {
 			yyerror2("Identifier %s used as both an attribute and a type",
 				 id);
+			*type = NULL;
 			free(id);
 			return -1;
 		}
@@ -457,8 +447,7 @@ type_datum_t *declare_type(unsigned char primary, unsigned char isattr)
 	return type;
 }
 
-static int user_implicit_bounds(hashtab_t users_tab,
-				char *user_id, user_datum_t *user)
+static int user_implicit_bounds(hashtab_t users_tab, char *user_id, user_datum_t *user)
 {
 	user_datum_t *bounds;
 	char *bounds_id, *delim;
@@ -476,19 +465,13 @@ static int user_implicit_bounds(hashtab_t users_tab,
 
 	bounds = hashtab_search(users_tab, bounds_id);
 	if (!bounds) {
-		yyerror2("user %s doesn't exist, is implicit bounds of %s",
-			 bounds_id, user_id);
+		yyerror2("Implicit user bounds declared (%s), but the parent (%s) was not found in the same scope", user_id, bounds_id);
+		free(bounds_id);
 		return -1;
 	}
 
-	if (!user->bounds)
-		user->bounds = bounds->s.value;
-	else if (user->bounds != bounds->s.value) {
-		yyerror2("user %s has inconsistent bounds %s/%s",
-			 user_id, bounds_id,
-			 policydbp->p_role_val_to_name[user->bounds - 1]);
-		return -1;
-	}
+	user->bounds = bounds->s.value;
+
 	free(bounds_id);
 
 	return 0;
@@ -524,9 +507,8 @@ static int create_user(uint32_t scope, user_datum_t **user, char **key)
 		ret = require_symbol(SYM_USERS, id, datum, &value, &value);
 	}
 
-	datum->s.value = value;
-
 	if (ret == 0) {
+		datum->s.value = value;
 		*user = datum;
 		*key = strdup(id);
 		if (*key == NULL) {
@@ -534,6 +516,7 @@ static int create_user(uint32_t scope, user_datum_t **user, char **key)
 			return -1;
 		}
 	} else if (ret == 1) {
+		datum->s.value = value;
 		*user = datum;
 		*key = id;
 	} else {
@@ -850,6 +833,14 @@ int require_class(int pass)
 				free(perm_id);
 				return -1;
 			}
+			if (datum->permissions.nprim >= PERM_SYMTAB_SIZE) {
+				yyerror2("Class %s would have too many permissions "
+					 "to fit in an access vector with permission %s",
+					 policydbp->p_class_val_to_name[datum->s.value - 1],
+					 perm_id);
+				free(perm_id);
+				return -1;
+			}
 			allocated = 1;
 			if ((perm = malloc(sizeof(*perm))) == NULL) {
 				yyerror("Out of memory!");
@@ -999,7 +990,7 @@ static int require_bool_tunable(int pass, int is_tunable)
 	if (is_tunable)
 		booldatum->flags |= COND_BOOL_FLAGS_TUNABLE;
 	retval =
-	    require_symbol(SYM_BOOLS, id, (hashtab_datum_t *) booldatum,
+	    require_symbol(SYM_BOOLS, id, booldatum,
 			   &booldatum->s.value, &booldatum->s.value);
 	if (retval != 0) {
 		cond_destroy_bool(id, booldatum, NULL);
@@ -1051,7 +1042,7 @@ int require_sens(int pass)
 		return -1;
 	}
 	mls_level_init(level->level);
-	retval = require_symbol(SYM_LEVELS, id, (hashtab_datum_t *) level,
+	retval = require_symbol(SYM_LEVELS, id, level,
 				&level->level->sens, &level->level->sens);
 	if (retval != 0) {
 		free(id);
@@ -1089,7 +1080,7 @@ int require_cat(int pass)
 	}
 	cat_datum_init(cat);
 
-	retval = require_symbol(SYM_CATS, id, (hashtab_datum_t *) cat,
+	retval = require_symbol(SYM_CATS, id, cat,
 				&cat->s.value, &cat->s.value);
 	if (retval != 0) {
 		free(id);
@@ -1104,14 +1095,14 @@ int require_cat(int pass)
 	return 0;
 }
 
-static int is_scope_in_stack(scope_datum_t * scope, scope_stack_t * stack)
+static int is_scope_in_stack(const scope_datum_t * scope, const scope_stack_t * stack)
 {
 	uint32_t i;
 	if (stack == NULL) {
 		return 0;	/* no matching scope found */
 	}
 	if (stack->type == 1) {
-		avrule_decl_t *decl = stack->decl;
+		const avrule_decl_t *decl = stack->decl;
 		for (i = 0; i < scope->decl_ids_len; i++) {
 			if (scope->decl_ids[i] == decl->decl_id) {
 				return 1;
@@ -1126,9 +1117,9 @@ static int is_scope_in_stack(scope_datum_t * scope, scope_stack_t * stack)
 	return is_scope_in_stack(scope, stack->parent);
 }
 
-int is_id_in_scope(uint32_t symbol_type, hashtab_key_t id)
+int is_id_in_scope(uint32_t symbol_type, const_hashtab_key_t id)
 {
-	scope_datum_t *scope =
+	const scope_datum_t *scope =
 	    (scope_datum_t *) hashtab_search(policydbp->scope[symbol_type].
 					     table, id);
 	if (scope == NULL) {
@@ -1138,7 +1129,7 @@ int is_id_in_scope(uint32_t symbol_type, hashtab_key_t id)
 }
 
 static int is_perm_in_scope_index(uint32_t perm_value, uint32_t class_value,
-				  scope_index_t * scope)
+				  const scope_index_t * scope)
 {
 	if (class_value > scope->class_perms_len) {
 		return 1;
@@ -1151,7 +1142,7 @@ static int is_perm_in_scope_index(uint32_t perm_value, uint32_t class_value,
 }
 
 static int is_perm_in_stack(uint32_t perm_value, uint32_t class_value,
-			    scope_stack_t * stack)
+			    const scope_stack_t * stack)
 {
 	if (stack == NULL) {
 		return 0;	/* no matching scope found */
@@ -1173,12 +1164,12 @@ static int is_perm_in_stack(uint32_t perm_value, uint32_t class_value,
 	return is_perm_in_stack(perm_value, class_value, stack->parent);
 }
 
-int is_perm_in_scope(hashtab_key_t perm_id, hashtab_key_t class_id)
+int is_perm_in_scope(const_hashtab_key_t perm_id, const_hashtab_key_t class_id)
 {
-	class_datum_t *cladatum =
+	const class_datum_t *cladatum =
 	    (class_datum_t *) hashtab_search(policydbp->p_classes.table,
 					     class_id);
-	perm_datum_t *perdatum;
+	const perm_datum_t *perdatum;
 	if (cladatum == NULL) {
 		return 1;
 	}
@@ -1361,17 +1352,17 @@ int begin_optional_else(int pass)
 	return 0;
 }
 
-static int copy_requirements(avrule_decl_t * dest, scope_stack_t * stack)
+static int copy_requirements(avrule_decl_t * dest, const scope_stack_t * stack)
 {
 	uint32_t i;
 	if (stack == NULL) {
 		return 0;
 	}
 	if (stack->type == 1) {
-		scope_index_t *src_scope = &stack->decl->required;
+		const scope_index_t *src_scope = &stack->decl->required;
 		scope_index_t *dest_scope = &dest->required;
 		for (i = 0; i < SYM_NUM; i++) {
-			ebitmap_t *src_bitmap = &src_scope->scope[i];
+			const ebitmap_t *src_bitmap = &src_scope->scope[i];
 			ebitmap_t *dest_bitmap = &dest_scope->scope[i];
 			if (ebitmap_union(dest_bitmap, src_bitmap)) {
 				yyerror("Out of memory!");
@@ -1397,7 +1388,7 @@ static int copy_requirements(avrule_decl_t * dest, scope_stack_t * stack)
 			    src_scope->class_perms_len;
 		}
 		for (i = 0; i < src_scope->class_perms_len; i++) {
-			ebitmap_t *src_bitmap = &src_scope->class_perms_map[i];
+			const ebitmap_t *src_bitmap = &src_scope->class_perms_map[i];
 			ebitmap_t *dest_bitmap =
 			    &dest_scope->class_perms_map[i];
 			if (ebitmap_union(dest_bitmap, src_bitmap)) {
@@ -1451,12 +1442,12 @@ static int push_stack(int stack_type, ...)
 	va_start(ap, stack_type);
 	switch (s->type = stack_type) {
 	case 1:{
-			s->u.avrule = va_arg(ap, avrule_block_t *);
+			va_arg(ap, avrule_block_t *);
 			s->decl = va_arg(ap, avrule_decl_t *);
 			break;
 		}
 	case 2:{
-			s->u.cond_list = va_arg(ap, cond_list_t *);
+			va_arg(ap, cond_list_t *);
 			break;
 		}
 	default:
@@ -1465,7 +1456,6 @@ static int push_stack(int stack_type, ...)
 	}
 	va_end(ap);
 	s->parent = stack_top;
-	s->child = NULL;
 	stack_top = s;
 	return 0;
 }
@@ -1477,9 +1467,17 @@ static void pop_stack(void)
 	scope_stack_t *parent;
 	assert(stack_top != NULL);
 	parent = stack_top->parent;
-	if (parent != NULL) {
-		parent->child = NULL;
-	}
 	free(stack_top);
 	stack_top = parent;
 }
+
+#ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
+void module_compiler_reset(void)
+{
+	while (stack_top)
+		pop_stack();
+
+	last_block = NULL;
+	next_decl_id = 1;
+}
+#endif

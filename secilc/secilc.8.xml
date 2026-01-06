@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE refentry PUBLIC "-//OASIS//DTD DocBook XML//EN"
+<!DOCTYPE refentry PUBLIC "-//OASIS//DTD DocBook XML V4.2//EN"
                "http://www.oasis-open.org/docbook/xml/4.2/docbookx.dtd">
 
 <refentry>
@@ -76,6 +76,11 @@
          </varlistentry>
 
          <varlistentry>
+            <term><option>-Q, --qualified-names</option></term>
+            <listitem><para>Allow names containing dots (qualified names). Blocks, blockinherits, blockabstracts, and in-statements will not be allowed.</para></listitem>
+         </varlistentry>
+
+         <varlistentry>
             <term><option>-m, --multiple-decls</option></term>
             <listitem><para>Allow some statements to be re-declared.</para></listitem>
          </varlistentry>
@@ -91,7 +96,7 @@
          </varlistentry>
 
          <varlistentry>
-            <term><option>-X, --attrs-size &lt;size></option></term>
+            <term><option>-X, --expand-size &lt;size></option></term>
             <listitem><para>Expand type attributes with fewer than <emphasis role="bold">&lt;SIZE></emphasis> members.</para></listitem>
          </varlistentry>
 

@@ -1,5 +1,5 @@
 
-/* Author : Stephen Smalley, <sds@tycho.nsa.gov> */
+/* Author : Stephen Smalley, <stephen.smalley.work@gmail.com> */
 
 /* FLASK */
 
@@ -33,6 +33,7 @@ int queue_insert(queue_t, queue_element_t);
 int queue_push(queue_t, queue_element_t);
 queue_element_t queue_remove(queue_t);
 queue_element_t queue_head(queue_t);
+void queue_clear(queue_t);
 void queue_destroy(queue_t);
 
 /* 

@@ -1,4 +1,4 @@
-/* Author : Stephen Smalley, <sds@tycho.nsa.gov> */
+/* Author : Stephen Smalley, <stephen.smalley.work@gmail.com> */
 
 /*
  * Updated: Joshua Brindle <jbrindle@tresys.com>
@@ -188,6 +188,7 @@ typedef struct type_datum {
 #define TYPE_FLAGS_EXPAND_ATTR_FALSE	(1 << 2)
 #define TYPE_FLAGS_EXPAND_ATTR (TYPE_FLAGS_EXPAND_ATTR_TRUE | \
 				TYPE_FLAGS_EXPAND_ATTR_FALSE)
+#define TYPE_FLAGS_NEVERAUDIT		(1 << 3)
 	uint32_t flags;
 	uint32_t bounds;	/* bounds type, if exist */
 } type_datum_t;
@@ -200,6 +201,7 @@ typedef struct type_datum {
 #define TYPEDATUM_PROPERTY_ATTRIBUTE	0x0002
 #define TYPEDATUM_PROPERTY_ALIAS	0x0004	/* userspace only */
 #define TYPEDATUM_PROPERTY_PERMISSIVE	0x0008	/* userspace only */
+#define TYPEDATUM_PROPERTY_NEVERAUDIT	0x0010	/* userspace only */
 
 /* User attributes */
 typedef struct user_datum {
@@ -217,7 +219,7 @@ typedef struct user_datum {
 typedef struct level_datum {
 	mls_level_t *level;	/* sensitivity and associated categories */
 	unsigned char isalias;	/* is this sensitivity an alias for another? */
-	unsigned char defined;
+	unsigned char notdefined; /* Only set to non-zero in checkpolicy */
 } level_datum_t;
 
 /* Category attributes */
@@ -251,14 +253,15 @@ typedef struct class_perm_node {
 	struct class_perm_node *next;
 } class_perm_node_t;
 
-#define xperm_test(x, p) (1 & (p[x >> 5] >> (x & 0x1f)))
-#define xperm_set(x, p) (p[x >> 5] |= (1 << (x & 0x1f)))
-#define xperm_clear(x, p) (p[x >> 5] &= ~(1 << (x & 0x1f)))
+#define xperm_test(x, p) (UINT32_C(1) & ((p)[(x) >> 5] >> ((x) & 0x1f)))
+#define xperm_set(x, p) ((p)[(x) >> 5] |= (UINT32_C(1) << ((x) & 0x1f)))
+#define xperm_clear(x, p) ((p)[(x) >> 5] &= ~(UINT32_C(1) << ((x) & 0x1f)))
 #define EXTENDED_PERMS_LEN 8
 
 typedef struct av_extended_perms {
 #define AVRULE_XPERMS_IOCTLFUNCTION	0x01
 #define AVRULE_XPERMS_IOCTLDRIVER	0x02
+#define AVRULE_XPERMS_NLMSG	0x03
 	uint8_t specified;
 	uint8_t driver;
 	/* 256 bits of permissions */
@@ -285,7 +288,8 @@ typedef struct avrule {
 #define AVRULE_XPERMS	(AVRULE_XPERMS_ALLOWED | AVRULE_XPERMS_AUDITALLOW | \
 				AVRULE_XPERMS_DONTAUDIT | AVRULE_XPERMS_NEVERALLOW)
 	uint32_t specified;
-#define RULE_SELF 1
+#define RULE_SELF       (1U << 0)
+#define RULE_NOTSELF    (1U << 1)
 	uint32_t flags;
 	type_set_t stypes;
 	type_set_t ttypes;
@@ -314,6 +318,7 @@ typedef struct role_allow_rule {
 } role_allow_rule_t;
 
 typedef struct filename_trans_rule {
+	uint32_t flags; /* may have RULE_SELF set */
 	type_set_t stypes;
 	type_set_t ttypes;
 	uint32_t tclass;
@@ -604,6 +609,13 @@ typedef struct policydb {
 	   bitmaps.  Someday the 0 bit may be used for global permissive */
 	ebitmap_t permissive_map;
 
+	/*
+	 * This bitmap is referenced by type NOT the typical type-1 used in
+	 * other bitmaps.  Someday the 0 bit may be used for global
+	 * neveraudit.
+	 */
+	ebitmap_t neveraudit_map;
+
 	unsigned policyvers;
 
 	unsigned handle_unknown;
@@ -612,6 +624,10 @@ typedef struct policydb {
 	sepol_security_class_t dir_class;
 	sepol_access_vector_t process_trans;
 	sepol_access_vector_t process_trans_dyntrans;
+
+	/* avrules whose line markes will be printed. Defaults to neverallow and
+	   neverallowxperm */
+	uint32_t line_marker_avrules;
 } policydb_t;
 
 struct sepol_policydb {
@@ -667,8 +683,8 @@ extern int scope_destroy(hashtab_key_t key, hashtab_datum_t datum, void *p);
 extern void class_perm_node_init(class_perm_node_t * x);
 extern void type_set_init(type_set_t * x);
 extern void type_set_destroy(type_set_t * x);
-extern int type_set_cpy(type_set_t * dst, type_set_t * src);
-extern int type_set_or_eq(type_set_t * dst, type_set_t * other);
+extern int type_set_cpy(type_set_t * dst, const type_set_t * src);
+extern int type_set_or_eq(type_set_t * dst, const type_set_t * other);
 extern void role_set_init(role_set_t * x);
 extern void role_set_destroy(role_set_t * x);
 extern void avrule_init(avrule_t * x);
@@ -695,9 +711,9 @@ extern void level_datum_init(level_datum_t * x);
 extern void level_datum_destroy(level_datum_t * x);
 extern void cat_datum_init(cat_datum_t * x);
 extern void cat_datum_destroy(cat_datum_t * x);
-extern int check_assertion(policydb_t *p, avrule_t *avrule);
+extern int check_assertion(policydb_t *p, const avrule_t *avrule);
 extern int check_assertions(sepol_handle_t * handle,
-			    policydb_t * p, avrule_t * avrules);
+			    policydb_t * p, const avrule_t * avrules);
 
 extern int symtab_insert(policydb_t * x, uint32_t sym,
 			 hashtab_key_t key, hashtab_datum_t datum,
@@ -756,10 +772,12 @@ extern int policydb_set_target_platform(policydb_t *p, int platform);
 #define POLICYDB_VERSION_INFINIBAND		31 /* Linux-specific */
 #define POLICYDB_VERSION_GLBLUB		32
 #define POLICYDB_VERSION_COMP_FTRANS	33 /* compressed filename transitions */
+#define POLICYDB_VERSION_COND_XPERMS	34 /* extended permissions in conditional policies */
+#define POLICYDB_VERSION_NEVERAUDIT	35 /* neveraudit domains */
 
 /* Range of policy versions we understand*/
 #define POLICYDB_VERSION_MIN	POLICYDB_VERSION_BASE
-#define POLICYDB_VERSION_MAX	POLICYDB_VERSION_COMP_FTRANS
+#define POLICYDB_VERSION_MAX	POLICYDB_VERSION_NEVERAUDIT
 
 /* Module versions and specific changes*/
 #define MOD_POLICYDB_VERSION_BASE		4
@@ -781,9 +799,12 @@ extern int policydb_set_target_platform(policydb_t *p, int platform);
 #define MOD_POLICYDB_VERSION_XPERMS_IOCTL  18
 #define MOD_POLICYDB_VERSION_INFINIBAND		19
 #define MOD_POLICYDB_VERSION_GLBLUB		20
+#define MOD_POLICYDB_VERSION_SELF_TYPETRANS	21
+#define MOD_POLICYDB_VERSION_COND_XPERMS	22
+#define MOD_POLICYDB_VERSION_NEVERAUDIT		23
 
 #define MOD_POLICYDB_VERSION_MIN MOD_POLICYDB_VERSION_BASE
-#define MOD_POLICYDB_VERSION_MAX MOD_POLICYDB_VERSION_GLBLUB
+#define MOD_POLICYDB_VERSION_MAX MOD_POLICYDB_VERSION_NEVERAUDIT
 
 #define POLICYDB_CONFIG_MLS    1
 
@@ -793,9 +814,15 @@ extern int policydb_set_target_platform(policydb_t *p, int platform);
 
 #define policydb_has_boundary_feature(p)			\
 	(((p)->policy_type == POLICY_KERN			\
-	  && p->policyvers >= POLICYDB_VERSION_BOUNDARY) ||	\
+	  && (p)->policyvers >= POLICYDB_VERSION_BOUNDARY) ||	\
 	 ((p)->policy_type != POLICY_KERN			\
-	  && p->policyvers >= MOD_POLICYDB_VERSION_BOUNDARY))
+	  && (p)->policyvers >= MOD_POLICYDB_VERSION_BOUNDARY))
+
+#define policydb_has_cond_xperms_feature(p)			\
+	(((p)->policy_type == POLICY_KERN			\
+	  && (p)->policyvers >= POLICYDB_VERSION_COND_XPERMS) ||	\
+	 ((p)->policy_type != POLICY_KERN			\
+	  && (p)->policyvers >= MOD_POLICYDB_VERSION_COND_XPERMS))
 
 /* the config flags related to unknown classes/perms are bits 2 and 3 */
 #define DENY_UNKNOWN	SEPOL_DENY_UNKNOWN

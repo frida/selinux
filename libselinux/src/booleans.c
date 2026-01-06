@@ -7,7 +7,6 @@
 
 #ifndef DISABLE_BOOL
 
-#include <assert.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -54,7 +53,11 @@ int security_get_boolean_names(char ***names, int *len)
 
 	snprintf(path, sizeof path, "%s%s", selinux_mnt, SELINUX_BOOL_DIR);
 	*len = scandir(path, &namelist, &filename_select, alphasort);
-	if (*len <= 0) {
+	if (*len < 0) {
+		return -1;
+	}
+	if (*len == 0) {
+		free(namelist);
 		errno = ENOENT;
 		return -1;
 	}
@@ -108,7 +111,7 @@ char *selinux_boolean_sub(const char *name)
 		char *ptr;
 		char *src = line_buf;
 		char *dst;
-		while (*src && isspace(*src))
+		while (*src && isspace((unsigned char)*src))
 			src++;
 		if (!*src)
 			continue;
@@ -116,23 +119,24 @@ char *selinux_boolean_sub(const char *name)
 			continue;
 
 		ptr = src;
-		while (*ptr && !isspace(*ptr))
+		while (*ptr && !isspace((unsigned char)*ptr))
 			ptr++;
 		*ptr++ = '\0';
 		if (strcmp(src, name) != 0)
 			continue;
 
 		dst = ptr;
-		while (*dst && isspace(*dst))
+		while (*dst && isspace((unsigned char)*dst))
 			dst++;
 		if (!*dst)
 			continue;
 		ptr = dst;
-		while (*ptr && !isspace(*ptr))
+		while (*ptr && !isspace((unsigned char)*ptr))
 			ptr++;
 		*ptr = '\0';
 
-		sub = strdup(dst);
+		if (!strchr(dst, '/'))
+			sub = strdup(dst);
 
 		break;
 	}
@@ -147,12 +151,12 @@ out:
 static int bool_open(const char *name, int flag) {
 	char *fname = NULL;
 	char *alt_name = NULL;
-	int len;
+	size_t len;
 	int fd = -1;
 	int ret;
 	char *ptr;
 
-	if (!name) {
+	if (!name || strchr(name, '/')) {
 		errno = EINVAL;
 		return -1;
 	}
@@ -164,9 +168,8 @@ static int bool_open(const char *name, int flag) {
 		return -1;
 
 	ret = snprintf(fname, len, "%s%s%s", selinux_mnt, SELINUX_BOOL_DIR, name);
-	if (ret < 0)
+	if (ret < 0 || (size_t)ret >= len)
 		goto out;
-	assert(ret < len);
 
 	fd = open(fname, flag);
 	if (fd >= 0 || errno != ENOENT)
@@ -184,9 +187,8 @@ static int bool_open(const char *name, int flag) {
 	fname = ptr;
 
 	ret = snprintf(fname, len, "%s%s%s", selinux_mnt, SELINUX_BOOL_DIR, alt_name);
-	if (ret < 0)
+	if (ret < 0 || (size_t)ret >= len)
 		goto out;
-	assert(ret < len);
 
 	fd = open(fname, flag);
 out:

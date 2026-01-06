@@ -47,16 +47,17 @@ class context:
 ##
 ## I18N
 ##
-PROGNAME = "policycoreutils"
+PROGNAME = "selinux-gui"
 try:
     import gettext
     kwargs = {}
     if sys.version_info < (3,):
         kwargs['unicode'] = True
-    gettext.install(PROGNAME,
+    t = gettext.translation(PROGNAME,
                     localedir="/usr/share/locale",
-                    codeset='utf-8',
-                    **kwargs)
+                    **kwargs,
+                    fallback=True)
+    _ = t.gettext
 except:
     try:
         import builtins
@@ -102,6 +103,13 @@ class fcontextPage(semanagePage):
         self.load()
         self.fcontextEntry = xml.get_object("fcontextEntry")
         self.fcontextFileTypeCombo = xml.get_object("fcontextFileTypeCombo")
+        # Populate file type combo_box
+        liststore = self.fcontextFileTypeCombo.get_model()
+        for ftype in seobject.file_type_str_to_option.keys():
+            iter = liststore.append()
+            liststore.set_value(iter, 0, ftype)
+        iter = liststore.get_iter_first()
+        self.fcontextFileTypeCombo.set_active_iter(iter)
         self.fcontextTypeEntry = xml.get_object("fcontextTypeEntry")
         self.fcontextMLSEntry = xml.get_object("fcontextMLSEntry")
 
@@ -125,7 +133,11 @@ class fcontextPage(semanagePage):
         self.fcontext = seobject.fcontextRecords()
         self.store.clear()
         fcon_dict = self.fcontext.get_all(self.local)
-        for k in sorted(fcon_dict.keys()):
+        if self.local:
+            fkeys = fcon_dict.keys()
+        else:
+            fkeys = sorted(fcon_dict.keys())
+        for k in fkeys:
             if not self.match(fcon_dict, k, filter):
                 continue
             iter = self.store.append()

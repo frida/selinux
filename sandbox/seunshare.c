@@ -4,6 +4,7 @@
  */
 
 #define _GNU_SOURCE
+#include <stdbool.h>
 #include <signal.h>
 #include <sys/fsuid.h>
 #include <sys/stat.h>
@@ -52,7 +53,8 @@
 
 #define BUF_SIZE 1024
 #define DEFAULT_PATH "/usr/bin:/bin"
-#define USAGE_STRING _("USAGE: seunshare [ -v ] [ -C ] [ -k ] [ -t tmpdir ] [ -h homedir ] [ -Z CONTEXT ] -- executable [args] ")
+#define USAGE_STRING _("USAGE: seunshare [ -v ] [ -C ] [ -k ] [ -t tmpdir ] [ -h homedir ] \
+[ -r runuserdir ] [ -P pipewiresocket ] [ -W waylandsocket ] [ -Z CONTEXT ] -- executable [args] ")
 
 static int verbose = 0;
 static int child = 0;
@@ -89,7 +91,7 @@ static int drop_privs(uid_t uid)
 /**
  * If the user sends a siginto to seunshare, kill the child's session
  */
-void handler(int sig) {
+static void handler(int sig) {
 	if (child > 0) kill(-child,sig);
 }
 
@@ -102,7 +104,7 @@ static int set_signal_handles(void)
 
 	/* Empty the signal mask in case someone is blocking a signal */
 	if (sigemptyset(&empty)) {
-		fprintf(stderr, "Unable to obtain empty signal set\n");
+		fprintf(stderr, _("Unable to obtain empty signal set\n"));
 		return -1;
 	}
 
@@ -110,12 +112,12 @@ static int set_signal_handles(void)
 
 	/* Terminate on SIGHUP */
 	if (signal(SIGHUP, SIG_DFL) == SIG_ERR) {
-		perror("Unable to set SIGHUP handler");
+		perror(_("Unable to set SIGHUP handler"));
 		return -1;
 	}
 
 	if (signal(SIGINT, handler) == SIG_ERR) {
-		perror("Unable to set SIGINT handler");
+		perror(_("Unable to set SIGINT handler"));
 		return -1;
 	}
 
@@ -265,6 +267,10 @@ static int seunshare_mount(const char *src, const char *dst, struct stat *src_st
 		is_tmp = 1;
 	}
 
+	if (strncmp("/run/user", dst, 9) == 0) {
+		flags = flags | MS_REC;
+	}
+
 	/* mount directory */
 	if (mount(src, dst, NULL, MS_BIND | flags, NULL) < 0) {
 		fprintf(stderr, _("Failed to mount %s on %s: %s\n"), src, dst, strerror(errno));
@@ -283,6 +289,31 @@ static int seunshare_mount(const char *src, const char *dst, struct stat *src_st
 			fprintf(stderr, _("Failed to mount /tmp on /var/tmp: %s\n"), strerror(errno));
 			return -1;
 		}
+	}
+
+	return 0;
+
+}
+
+/**
+ * Mount directory and check that we mounted the right directory.
+ */
+static int seunshare_mount_file(const char *src, const char *dst)
+{
+	int flags = 0;
+
+	if (verbose)
+		printf(_("Mounting %s on %s\n"), src, dst);
+
+	if (access(dst, F_OK) == -1) {
+		 FILE *fptr;
+         fptr = fopen(dst, "w");
+		 fclose(fptr);
+	}
+	/* mount file */
+	if (mount(src, dst, NULL, MS_BIND | flags, NULL) < 0) {
+		fprintf(stderr, _("Failed to mount %s on %s: %s\n"), src, dst, strerror(errno));
+		return -1;
 	}
 
 	return 0;
@@ -323,7 +354,7 @@ static int rsynccmd(const char * src, const char *dst, char **cmdbuf)
 
 	/* match glob for all files in src dir */
 	if (asprintf(&buf, "%s/*", src) == -1) {
-		fprintf(stderr, "Out of memory\n");
+		fprintf(stderr, _("Out of memory\n"));
 		return -1;
 	}
 
@@ -341,12 +372,12 @@ static int rsynccmd(const char * src, const char *dst, char **cmdbuf)
 
 		if (!buf) {
 			if (asprintf(&newbuf, "\'%s\'", path) == -1) {
-				fprintf(stderr, "Out of memory\n");
+				fprintf(stderr, _("Out of memory\n"));
 				goto err;
 			}
 		} else {
 			if (asprintf(&newbuf, "%s  \'%s\'", buf, path) == -1) {
-				fprintf(stderr, "Out of memory\n");
+				fprintf(stderr, _("Out of memory\n"));
 				goto err;
 			}
 		}
@@ -357,7 +388,7 @@ static int rsynccmd(const char * src, const char *dst, char **cmdbuf)
 
 	if (buf) {
 		if (asprintf(&newbuf, "/usr/bin/rsync -trlHDq %s '%s'", buf, dst) == -1) {
-			fprintf(stderr, "Out of memory\n");
+			fprintf(stderr, _("Out of memory\n"));
 			goto err;
 		}
 		*cmdbuf=newbuf;
@@ -371,6 +402,66 @@ err:
 	free(buf); buf = NULL;
 	globfree(&fglob);
 	return rc;
+}
+
+/*
+ * Recursively delete a directory.
+ * SAFETY: This function will NOT follow symbolic links (AT_SYMLINK_NOFOLLOW).
+ *         As a result, this function can be run safely on a directory owned by
+ *         a non-root user: symbolic links to root paths (such as /root) will
+ *         not be followed.
+ */
+static bool rm_rf(int targetfd, const char *path) {
+	struct stat statbuf;
+
+	if (fstatat(targetfd, path, &statbuf, AT_SYMLINK_NOFOLLOW) < 0) {
+		if (errno == ENOENT) {
+			return true;
+		}
+		perror("fstatat");
+		return false;
+	}
+
+	if (S_ISDIR(statbuf.st_mode)) {
+		const int newfd = openat(targetfd, path, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+		if (newfd < 0) {
+			perror("openat");
+			return false;
+		}
+
+		DIR *dir = fdopendir(newfd);
+		if (!dir) {
+			perror("fdopendir");
+			close(newfd);
+			return false;
+		}
+
+		struct dirent *entry;
+		int rc = true;
+		while ((entry = readdir(dir)) != NULL) {
+			if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+				continue;
+			}
+
+			if (!rm_rf(dirfd(dir), entry->d_name)) {
+				rc = false;
+			}
+		}
+
+		closedir(dir);
+
+		if (unlinkat(targetfd, path, AT_REMOVEDIR) < 0) {
+			perror("unlinkat");
+			rc = false;
+		}
+
+		return rc;
+	}
+	if (unlinkat(targetfd, path, 0) < 0) {
+		perror("unlinkat");
+		return false;
+	}
+	return true;
 }
 
 /**
@@ -398,24 +489,17 @@ static int cleanup_tmpdir(const char *tmpdir, const char *src,
 		free(cmdbuf); cmdbuf = NULL;
 	}
 
-	/* remove files from the runtime temporary directory */
-	if (asprintf(&cmdbuf, "/bin/rm -r '%s/' 2>/dev/null", tmpdir) == -1) {
-		fprintf(stderr, _("Out of memory\n"));
-		cmdbuf = NULL;
-		rc++;
-	}
-	/* this may fail if there's root-owned file left in the runtime tmpdir */
-	if (cmdbuf && spawn_command(cmdbuf, pwd->pw_uid) != 0) rc++;
-	free(cmdbuf); cmdbuf = NULL;
-
-	/* remove runtime temporary directory */
 	if ((uid_t)setfsuid(0) != 0) {
 		/* setfsuid does not return error, but this check makes code checkers happy */
 		rc++;
 	}
 
-	if (rmdir(tmpdir) == -1)
-		fprintf(stderr, _("Failed to remove directory %s: %s\n"), tmpdir, strerror(errno));
+	/* Recursively remove the runtime temp directory.  */
+	if (!rm_rf(AT_FDCWD, tmpdir)) {
+		fprintf(stderr, _("Failed to recursively remove directory %s\n"), tmpdir);
+		rc++;
+	}
+
 	if ((uid_t)setfsuid(pwd->pw_uid) != 0) {
 		fprintf(stderr, _("unable to switch back to user after clearing tmp dir\n"));
 		rc++;
@@ -616,6 +700,8 @@ killall (const char *execcon)
 int main(int argc, char **argv) {
 	int status = -1;
 	const char *execcon = NULL;
+	const char *pipewire_socket = NULL;
+	const char *wayland_display = NULL;
 
 	int clflag;		/* holds codes for command line flags */
 	int kill_all = 0;
@@ -623,19 +709,26 @@ int main(int argc, char **argv) {
 	char *homedir_s = NULL;	/* homedir spec'd by user in argv[] */
 	char *tmpdir_s = NULL;	/* tmpdir spec'd by user in argv[] */
 	char *tmpdir_r = NULL;	/* tmpdir created by seunshare */
+	char *runuserdir_s = NULL;	/* /var/run/user/UID spec'd by user in argv[] */
+	char *runuserdir_r = NULL;	/* /var/run/user/UID created by seunshare */
 
 	struct stat st_curhomedir;
 	struct stat st_homedir;
 	struct stat st_tmpdir_s;
 	struct stat st_tmpdir_r;
+	struct stat st_runuserdir_s;
+	struct stat st_runuserdir_r;
 
 	const struct option long_options[] = {
 		{"homedir", 1, 0, 'h'},
 		{"tmpdir", 1, 0, 't'},
+		{"runuserdir", 1, 0, 'r'},
 		{"kill", 1, 0, 'k'},
 		{"verbose", 1, 0, 'v'},
 		{"context", 1, 0, 'Z'},
 		{"capabilities", 1, 0, 'C'},
+		{"wayland", 1, 0, 'W'},
+		{"pipewire", 1, 0, 'P'},
 		{NULL, 0, 0, 0}
 	};
 
@@ -665,7 +758,7 @@ int main(int argc, char **argv) {
 	}
 
 	while (1) {
-		clflag = getopt_long(argc, argv, "Ccvh:t:Z:", long_options, NULL);
+		clflag = getopt_long(argc, argv, "Ccvh:r:t:W:Z:", long_options, NULL);
 		if (clflag == -1)
 			break;
 
@@ -679,11 +772,20 @@ int main(int argc, char **argv) {
 		case 'h':
 			homedir_s = optarg;
 			break;
+		case 'r':
+			runuserdir_s = optarg;
+			break;
 		case 'v':
 			verbose++;
 			break;
 		case 'C':
 			cap_set = CAPNG_SELECT_CAPS;
+			break;
+		case 'P':
+			pipewire_socket = optarg;
+			break;
+		case 'W':
+			wayland_display = optarg;
 			break;
 		case 'Z':
 			execcon = optarg;
@@ -729,12 +831,22 @@ int main(int argc, char **argv) {
 	if (tmpdir_s && (
 		verify_directory(tmpdir_s, NULL, &st_tmpdir_s) < 0 ||
 		check_owner_uid(uid, tmpdir_s, &st_tmpdir_s))) return -1;
+	if (runuserdir_s && (
+		verify_directory(runuserdir_s, NULL, &st_runuserdir_s) < 0 ||
+		check_owner_uid(uid, runuserdir_s, &st_runuserdir_s))) return -1;
+
 	if ((uid_t)setfsuid(0) != uid) return -1;
 
 	/* create runtime tmpdir */
 	if (tmpdir_s && (tmpdir_r = create_tmpdir(tmpdir_s, &st_tmpdir_s,
 						  &st_tmpdir_r, pwd, execcon)) == NULL) {
 		fprintf(stderr, _("Failed to create runtime temporary directory\n"));
+		return -1;
+	}
+	/* create runtime runuserdir */
+	if (runuserdir_s && (runuserdir_r = create_tmpdir(runuserdir_s, &st_runuserdir_s,
+						  &st_runuserdir_r, pwd, execcon)) == NULL) {
+		fprintf(stderr, _("Failed to create runtime $XDG_RUNTIME_DIR directory\n"));
 		return -1;
 	}
 
@@ -749,8 +861,14 @@ int main(int argc, char **argv) {
 		char *display = NULL;
 		char *LANG = NULL;
 		char *RUNTIME_DIR = NULL;
+		char *XDG_SESSION_TYPE = NULL;
 		int rc = -1;
 		char *resolved_path = NULL;
+		char *wayland_path_s = NULL; /* /tmp/.../wayland-0 */
+		char *wayland_path = NULL; /* /run/user/UID/wayland-0 */
+		char *pipewire_path_s = NULL; /* /tmp/.../pipewire-0 */
+		char *pipewire_path = NULL; /* /run/user/UID/pipewire-0 */
+
 
 		if (unshare(CLONE_NEWNS) < 0) {
 			perror(_("Failed to unshare"));
@@ -775,7 +893,57 @@ int main(int argc, char **argv) {
 		if (check_owner_uid(uid, resolved_path, &st_curhomedir) < 0)
 			goto childerr;
 
-		/* mount homedir and tmpdir, in this order */
+		if ((RUNTIME_DIR = getenv("XDG_RUNTIME_DIR")) != NULL) {
+			if ((RUNTIME_DIR = strdup(RUNTIME_DIR)) == NULL) {
+				perror(_("Out of memory"));
+				goto childerr;
+			}
+		} else {
+			if (asprintf(&RUNTIME_DIR, "/run/user/%d", uid) == -1) {
+				perror(_("Out of memory\n"));
+				goto childerr;
+			}
+		}
+
+		if ((XDG_SESSION_TYPE = getenv("XDG_SESSION_TYPE")) != NULL) {
+			if ((XDG_SESSION_TYPE = strdup(XDG_SESSION_TYPE)) == NULL) {
+				perror(_("Out of memory"));
+				goto childerr;
+			}
+		}
+
+		if (runuserdir_s && (wayland_display || pipewire_socket)) {
+			if (wayland_display) {
+				if (asprintf(&wayland_path_s, "%s/%s", runuserdir_s, wayland_display) == -1) {
+					perror(_("Out of memory"));
+					goto childerr;
+				}
+
+				if (asprintf(&wayland_path, "%s/%s", RUNTIME_DIR, wayland_display) == -1) {
+					perror(_("Out of memory"));
+					goto childerr;
+				}
+
+				if (seunshare_mount_file(wayland_path, wayland_path_s) == -1)
+					goto childerr;
+			}
+
+			if (pipewire_socket) {
+				if (asprintf(&pipewire_path_s, "%s/%s", runuserdir_s, pipewire_socket) == -1) {
+					perror(_("Out of memory"));
+					goto childerr;
+				}
+				if (asprintf(&pipewire_path, "%s/pipewire-0", RUNTIME_DIR) == -1) {
+					perror(_("Out of memory"));
+					goto childerr;
+				}
+				seunshare_mount_file(pipewire_path, pipewire_path_s);
+			}
+		}
+
+		/* mount homedir, runuserdir and tmpdir, in this order */
+		if (runuserdir_s &&	seunshare_mount(runuserdir_s, RUNTIME_DIR,
+			&st_runuserdir_s) != 0) goto childerr;
 		if (homedir_s && seunshare_mount(homedir_s, resolved_path,
 			&st_homedir) != 0) goto childerr;
 		if (tmpdir_s &&	seunshare_mount(tmpdir_r, "/tmp",
@@ -784,10 +952,21 @@ int main(int argc, char **argv) {
 		if (drop_privs(uid) != 0) goto childerr;
 
 		/* construct a new environment */
-		if ((display = getenv("DISPLAY")) != NULL) {
-			if ((display = strdup(display)) == NULL) {
-				perror(_("Out of memory"));
-				goto childerr;
+
+		if (XDG_SESSION_TYPE && strcmp(XDG_SESSION_TYPE, "wayland") == 0) {
+			if (wayland_display == NULL && (wayland_display = getenv("WAYLAND_DISPLAY")) != NULL) {
+				if ((wayland_display = strdup(wayland_display)) == NULL) {
+					perror(_("Out of memory"));
+					goto childerr;
+				}
+			}
+		}
+		else {
+			if ((display = getenv("DISPLAY")) != NULL) {
+				if ((display = strdup(display)) == NULL) {
+					perror(_("Out of memory"));
+					goto childerr;
+				}
 			}
 		}
 
@@ -799,19 +978,20 @@ int main(int argc, char **argv) {
 			}
 		}
 
-		if ((RUNTIME_DIR = getenv("XDG_RUNTIME_DIR")) != NULL) {
-			if ((RUNTIME_DIR = strdup(RUNTIME_DIR)) == NULL) {
-				perror(_("Out of memory"));
-				goto childerr;
-			}
-		}
-
 		if ((rc = clearenv()) != 0) {
 			perror(_("Failed to clear environment"));
 			goto childerr;
 		}
-		if (display)
+		if (display) {
 			rc |= setenv("DISPLAY", display, 1);
+		}
+		if (wayland_display) {
+			rc |= setenv("WAYLAND_DISPLAY", wayland_display, 1);
+		}
+
+		if (XDG_SESSION_TYPE)
+			rc |= setenv("XDG_SESSION_TYPE", XDG_SESSION_TYPE, 1);
+
 		if (LANG)
 			rc |= setenv("LANG", LANG, 1);
 		if (RUNTIME_DIR)
@@ -849,9 +1029,14 @@ int main(int argc, char **argv) {
 		fprintf(stderr, _("Failed to execute command %s: %s\n"), argv[optind], strerror(errno));
 childerr:
 		free(resolved_path);
+		free(wayland_path);
+		free(wayland_path_s);
+		free(pipewire_path);
+		free(pipewire_path_s);
 		free(display);
 		free(LANG);
 		free(RUNTIME_DIR);
+		free(XDG_SESSION_TYPE);
 		exit(-1);
 	}
 

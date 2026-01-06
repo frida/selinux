@@ -33,11 +33,15 @@ int security_canonicalize_context_raw(const char * con,
 		ret = -1;
 		goto out;
 	}
-	strncpy(buf, con, size);
+	if (strlcpy(buf, con, size) >= size) {
+		errno = EOVERFLOW;
+		ret = -1;
+		goto out;
+	}
 
 	ret = write(fd, buf, strlen(buf) + 1);
 	if (ret < 0)
-		goto out2;
+		goto out;
 
 	memset(buf, 0, size);
 	ret = read(fd, buf, size - 1);
@@ -50,12 +54,11 @@ int security_canonicalize_context_raw(const char * con,
 	*canoncon = strdup(buf);
 	if (!(*canoncon)) {
 		ret = -1;
-		goto out2;
+		goto out;
 	}
 	ret = 0;
-      out2:
-	free(buf);
       out:
+	free(buf);
 	close(fd);
 	return ret;
 }

@@ -24,19 +24,21 @@
 
 #include "utilities.h"
 
-int test_store_enabled = 0;
+static int test_store_enabled = 0;
 
 semanage_handle_t *sh = NULL;
 
 /* Silence any error output caused by our tests
  * by using this dummy function to catch messages.
  */
-void test_msg_handler(void *varg, semanage_handle_t *handle, const char *fmt,
+void test_msg_handler(__attribute__((unused)) void *varg,
+		      __attribute__((unused)) semanage_handle_t *handle,
+		      __attribute__((unused)) const char *fmt,
 		      ...)
 {
 }
 
-int create_test_store() {
+int create_test_store(void) {
 	FILE *fptr;
 
 	if (mkdir("test-policy", 0700) < 0)
@@ -76,7 +78,7 @@ void enable_test_store(void) {
 	test_store_enabled = 1;
 }
 
-int write_test_policy(char *data, size_t data_len) {
+static int write_test_policy(char *data, size_t data_len) {
 	FILE *fptr = fopen("test-policy/store/active/policy.kern", "wb+");
 
 	if (!fptr) {
@@ -99,6 +101,7 @@ int write_test_policy_from_file(const char *filename) {
 	char *buf = NULL;
 	size_t len = 0;
 	FILE *fptr = fopen(filename, "rb");
+	int rc;
 
 	if (!fptr) {
 		perror("fopen");
@@ -120,7 +123,9 @@ int write_test_policy_from_file(const char *filename) {
 	fread(buf, len, 1, fptr);
 	fclose(fptr);
 
-	return write_test_policy(buf, len);
+	rc = write_test_policy(buf, len);
+	free(buf);
+	return rc;
 }
 
 int write_test_policy_src(unsigned char *data, unsigned int data_len) {
@@ -165,7 +170,7 @@ int write_test_policy_src(unsigned char *data, unsigned int data_len) {
 	return 0;
 }
 
-int destroy_test_store() {
+int destroy_test_store(void) {
 	FTS *ftsp = NULL;
 	FTSENT *curr = NULL;
 	int ret = 0;
@@ -210,7 +215,7 @@ void helper_handle_create(void) {
 		semanage_set_create_store(sh, 1);
 		semanage_set_reload(sh, 0);
 		semanage_set_store_root(sh, "");
-		semanage_select_store(sh, (char *) "store",
+		semanage_select_store(sh, "store",
 				      SEMANAGE_CON_DIRECT);
 	}
 }
@@ -268,7 +273,7 @@ void setup_handle_invalid_store(level_t level) {
 
 	helper_handle_create();
 
-	semanage_select_store(sh, (char *) "", SEMANAGE_CON_INVALID);
+	semanage_select_store(sh, "", SEMANAGE_CON_INVALID);
 
 	if (level >= SH_CONNECT)
 		helper_connect();

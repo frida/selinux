@@ -1,4 +1,4 @@
-#!/usr/bin/python3 -Es
+#!/usr/bin/python3 -EsI
 # Copyright (C) 2012-2013 Red Hat
 # AUTHOR: Miroslav Grepl <mgrepl@redhat.com>
 # AUTHOR: David Quigley <selinux@davequigley.com>
@@ -23,20 +23,24 @@
 #
 #
 
-import traceback
 import argparse
+import os
+import re
 import seobject
 import sys
-PROGNAME = "policycoreutils"
+import traceback
+
+PROGNAME = "selinux-python"
 try:
     import gettext
     kwargs = {}
     if sys.version_info < (3,):
         kwargs['unicode'] = True
-    gettext.install(PROGNAME,
+    t = gettext.translation(PROGNAME,
                     localedir="/usr/share/locale",
-                    codeset='utf-8',
-                    **kwargs)
+                    **kwargs,
+                    fallback=True)
+    _ = t.gettext
 except:
     try:
         import builtins
@@ -50,7 +54,7 @@ usage_login = "semanage login [-h] [-n] [-N] [-S STORE] ["
 usage_login_dict = {' --add': ('-s SEUSER', '-r RANGE', 'LOGIN',), ' --modify': ('-s SEUSER', '-r RANGE', 'LOGIN',), ' --delete': ('LOGIN',), ' --list': ('-C',), ' --extract': ('',), ' --deleteall': ('',)}
 
 usage_fcontext = "semanage fcontext [-h] [-n] [-N] [-S STORE] ["
-usage_fcontext_dict = {' --add': ('(', '-t TYPE', '-f FTYPE', '-r RANGE', '-s SEUSER', '|', '-e EQUAL', ')', 'FILE_SPEC',), ' --delete': ('(', '-t TYPE', '-f FTYPE', '|', '-e EQUAL', ')', 'FILE_SPEC',), ' --modify': ('(', '-t TYPE', '-f FTYPE', '-r RANGE', '-s SEUSER', '|', '-e EQUAL', ')', 'FILE_SPEC',), ' --list': ('[-C]',), ' --extract': ('',), ' --deleteall': ('',)}
+usage_fcontext_dict = {' --add': ('(', '-t TYPE', '-f FTYPE', '-r RANGE', '-s SEUSER', '|', '-e TARGET_PATH', ')', 'FILE_SPEC',), ' --delete': ('(', '-t TYPE', '-f FTYPE', '|', '-e TARGET_PATH', ')', 'FILE_SPEC',), ' --modify': ('(', '-t TYPE', '-f FTYPE', '-r RANGE', '-s SEUSER', '|', '-e TARGET_PATH', ')', 'FILE_SPEC',), ' --list': ('[-C]',), ' --extract': ('',), ' --deleteall': ('',)}
 
 usage_user = "semanage user [-h] [-n] [-N] [-S STORE] ["
 usage_user_dict = {' --add': ('(', '-L LEVEL', '-R ROLES', '-r RANGE', 'SEUSER', ')'), ' --delete': ('SEUSER',), ' --modify': ('(', '-L LEVEL', '-R ROLES', '-r RANGE', '-s SEUSER', 'SEUSER', ')'), ' --list': ('-C',), ' --extract': ('',), ' --deleteall': ('',)}
@@ -126,7 +130,7 @@ class SetImportFile(argparse.Action):
                 sys.exit(1)
         setattr(namespace, self.dest, values)
 
-# define dictonary for seobject OBEJCTS
+# define dictionary for seobject OBJECTS
 object_dict = {
     'login': seobject.loginRecords,
     'user': seobject.seluserRecords,
@@ -143,7 +147,7 @@ object_dict = {
 }
 
 def generate_custom_usage(usage_text, usage_dict):
-    # generate custom usage from given text and dictonary
+    # generate custom usage from given text and dictionary
     sorted_keys = []
     for i in usage_dict.keys():
         sorted_keys.append(i)
@@ -157,7 +161,7 @@ def generate_custom_usage(usage_text, usage_dict):
 
 
 def handle_opts(args, dict, target_key):
-    # handle conflict and required options for given dictonary
+    # handle conflict and required options for given dictionary
     # {action:[conflict_opts,require_opts]}
 
     # first we need to catch conflicts
@@ -234,30 +238,22 @@ def parser_add_level(parser, name):
 
 
 def parser_add_range(parser, name):
-    parser.add_argument('-r', '--range', default='',
-                        help=_('''
-MLS/MCS Security Range (MLS/MCS Systems only)
-SELinux Range  for SELinux login mapping
-defaults to the SELinux user record range.
-SELinux Range for SELinux user defaults to s0.
-'''))
+    parser.add_argument('-r', '--range', default='', help=_(
+        "MLS/MCS Security Range (MLS/MCS Systems only) SELinux Range for SELinux login mapping defaults to the SELinux user record range. \
+SELinux Range for SELinux user defaults to s0."
+    ))
 
 
 def parser_add_proto(parser, name):
-    parser.add_argument('-p', '--proto', help=_('''
-    Protocol  for  the specified port (tcp|udp|dccp|sctp) or internet protocol
-    version for the specified node (ipv4|ipv6).
-'''))
+    parser.add_argument('-p', '--proto', help=_(
+        "Protocol for the specified port (tcp|udp|dccp|sctp) or internet protocol version for the specified node (ipv4|ipv6)."
+    ))
 
 def parser_add_subnet_prefix(parser, name):
-    parser.add_argument('-x', '--subnet_prefix', help=_('''
-    Subnet prefix for  the specified infiniband ibpkey.
-'''))
+    parser.add_argument('-x', '--subnet_prefix', help=_('Subnet prefix for  the specified infiniband ibpkey.'))
 
 def parser_add_ibdev_name(parser, name):
-    parser.add_argument('-z', '--ibdev_name', help=_('''
-    Name for the specified infiniband end port.
-'''))
+    parser.add_argument('-z', '--ibdev_name', help=_("Name for the specified infiniband end port."))
 
 def parser_add_modify(parser, name):
     parser.add_argument('-m', '--modify', dest='action', action='store_const', const='modify', help=_("Modify a record of the %s object type") % name)
@@ -310,7 +306,7 @@ def setupLoginParser(subparsers):
 def handleFcontext(args):
     fcontext_args = {'list': [('equal', 'ftype', 'seuser', 'type'), ('')], 'add': [('locallist'), ('type', 'file_spec')], 'modify': [('locallist'), ('type', 'file_spec')], 'delete': [('locallist'), ('file_spec')], 'extract': [('locallist', 'equal', 'ftype', 'seuser', 'type'), ('')], 'deleteall': [('locallist'), ('')]}
     # we can not use mutually for equal because we can define some actions together with equal
-    fcontext_equal_args = {'equal': [('list', 'locallist', 'type', 'ftype', 'seuser', 'deleteall', 'extract'), ()]}
+    fcontext_equal_args = {'equal': [('list', 'locallist', 'type', 'ftype', 'seuser', 'deleteall', 'extract'), ('file_spec')]}
 
     if args.action and args.equal:
         handle_opts(args, fcontext_equal_args, "equal")
@@ -326,7 +322,7 @@ def handleFcontext(args):
             OBJECT.add(args.file_spec, args.type, args.ftype, args.range, args.seuser)
     if args.action == "modify":
         if args.equal:
-            OBJECT.add_equal(args.file_spec, args.equal)
+            OBJECT.modify_equal(args.file_spec, args.equal)
         else:
             OBJECT.modify(args.file_spec, args.type, args.ftype, args.range, args.seuser)
     if args.action == "delete":
@@ -344,15 +340,6 @@ def handleFcontext(args):
 
 
 def setupFcontextParser(subparsers):
-    ftype_help = '''
-File Type.   This is used with fcontext.  Requires a  file  type
-as  shown  in  the  mode  field by ls, e.g. use d to match only
-directories or f to match only regular files. The following
-file type options can be passed:
-f (regular file),d (directory),c (character device),
-b (block device),s (socket),l (symbolic link),p (named pipe)
-If you do not specify a file type, the file type will default to "all files".
-'''
     generate_usage = generate_custom_usage(usage_fcontext, usage_fcontext_dict)
     fcontextParser = subparsers.add_parser('fcontext', usage=generate_usage, help=_("Manage file context mapping definitions"))
     parser_add_locallist(fcontextParser, "fcontext")
@@ -368,15 +355,21 @@ If you do not specify a file type, the file type will default to "all files".
     parser_add_extract(fcontext_action, "fcontext")
     parser_add_deleteall(fcontext_action, "fcontext")
 
-    fcontextParser.add_argument('-e', '--equal', help=_('''Substitute  target  path with sourcepath when generating default
-                                                                  label.  This is used with fcontext. Requires source  and  target
-                                                                  path  arguments.  The context labeling for the target subtree is
-                                                                  made equivalent to that defined for the source.'''))
-    fcontextParser.add_argument('-f', '--ftype', default="", choices=["a", "f", "d", "c", "b", "s", "l", "p"], help=_(ftype_help))
+    fcontextParser.add_argument('-e', '--equal', metavar='TARGET_PATH', help=_(
+        'Substitute FILE_SPEC with TARGET_PATH for file label lookup. This is used with fcontext. Requires source and target \
+path arguments to be path prefixes and does not support regular expressions. \
+The context labeling for the target subtree is made equivalent to that defined for the source.'
+    ))
+    fcontextParser.add_argument('-f', '--ftype', default="", choices=["a", "f", "d", "c", "b", "s", "l", "p"], help=_(
+        'File Type. This is used with fcontext. Requires a file type as shown in the mode field by ls, e.g. use d to match only \
+directories or f to match only regular files. The following file type options can be passed: f (regular file), d (directory), \
+c (character device), b (block device), s (socket), l (symbolic link), p (named pipe). \
+If you do not specify a file type, the file type will default to "all files".'
+    ))
     parser_add_seuser(fcontextParser, "fcontext")
     parser_add_type(fcontextParser, "fcontext")
     parser_add_range(fcontextParser, "fcontext")
-    fcontextParser.add_argument('file_spec', nargs='?', default=None, help=_('file_spec'))
+    fcontextParser.add_argument('file_spec', nargs='?', default=None, metavar='FILE_SPEC', help=_('Path to be labeled (may be in the form of a Perl compatible regular expression)'))
     fcontextParser.set_defaults(func=handleFcontext)
 
 
@@ -422,9 +415,7 @@ def setupUserParser(subparsers):
     parser_add_range(userParser, "user")
     userParser.add_argument('-R', '--roles', default=[],
                             action=CheckRole,
-                            help=_('''
-SELinux Roles.  You must enclose multiple roles within quotes, separate by spaces. Or specify -R multiple times.
-'''))
+                            help=_("SELinux Roles. You must enclose multiple roles within quotes, separate by spaces. Or specify -R multiple times."))
     userParser.add_argument('-P', '--prefix', default="user", help=argparse.SUPPRESS)
     userParser.add_argument('selinux_name', nargs='?', default=None, help=_('selinux_name'))
     userParser.set_defaults(func=handleUser)
@@ -797,8 +788,6 @@ def setupExportParser(subparsers):
     exportParser.add_argument('-f', '--output_file', dest='output_file', action=SetExportFile, help=_('Output file'))
     exportParser.set_defaults(func=handleExport)
 
-import re
-
 
 def mkargv(line):
     dquote = "\""
@@ -851,10 +840,29 @@ def handleImport(args):
     trans = seobject.semanageRecords(args)
     trans.start()
 
+    deleteCommands = []
+    commands = []
+    # separate commands for deletion from the rest so they can be
+    # applied in a separate transaction
     for l in sys.stdin.readlines():
         if len(l.strip()) == 0:
             continue
+        if "-d" in l or "-D" in l:
+            deleteCommands.append(l)
+        else:
+            commands.append(l)
 
+    if deleteCommands:
+        importHelper(deleteCommands)
+        trans.finish()
+        trans.start()
+
+    importHelper(commands)
+    trans.finish()
+
+
+def importHelper(commands):
+    for l in commands:
         try:
             commandParser = createCommandParser()
             args = commandParser.parse_args(mkargv(l))
@@ -868,8 +876,6 @@ def handleImport(args):
         except KeyboardInterrupt:
             sys.exit(0)
 
-    trans.finish()
-
 
 def setupImportParser(subparsers):
     importParser = subparsers.add_parser('import', help=_('Import local customizations'))
@@ -882,9 +888,9 @@ def setupImportParser(subparsers):
 def createCommandParser():
     commandParser = seParser(prog='semanage',
                              formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-                             description='''semanage is used to configure certain elements
-                                                            of SELinux policy with-out requiring modification
-                                                            to or recompilation from policy source.''')
+                             description=_(
+            "semanage is used to configure certain elements of SELinux policy with-out requiring modification or recompilation from policy source."
+                             ))
 
     #To add a new subcommand define the parser for it in a function above and call it here.
     subparsers = commandParser.add_subparsers(dest='subcommand')
@@ -945,8 +951,15 @@ def do_parser():
         args = commandParser.parse_args(make_args(sys.argv))
         args.func(args)
         sys.exit(0)
-    except IOError as e:
+    except BrokenPipeError as e:
         sys.stderr.write("%s: %s\n" % (e.__class__.__name__, str(e)))
+        # Python flushes standard streams on exit; redirect remaining output
+        # to devnull to avoid another BrokenPipeError at shutdown
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, sys.stdout.fileno())
+        sys.exit(1)
+    except OSError as e:
+        sys.stderr.write("%s: %s\n" % (e.__class__.__name__, e.args[1]))
         sys.exit(1)
     except KeyboardInterrupt:
         sys.exit(0)
@@ -955,9 +968,6 @@ def do_parser():
         sys.exit(1)
     except KeyError as e:
         sys.stderr.write("%s: %s\n" % (e.__class__.__name__, e.args[0]))
-        sys.exit(1)
-    except OSError as e:
-        sys.stderr.write("%s: %s\n" % (e.__class__.__name__, e.args[1]))
         sys.exit(1)
     except RuntimeError as e:
         sys.stderr.write("%s: %s\n" % (e.__class__.__name__, e.args[0]))

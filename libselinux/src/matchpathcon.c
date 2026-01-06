@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <sys/stat.h>
 #include <string.h>
 #include <errno.h>
@@ -35,7 +36,7 @@ void set_matchpathcon_printf(void (*f) (const char *fmt, ...))
 	myprintf_compat = 1;
 }
 
-int compat_validate(struct selabel_handle *rec,
+int compat_validate(const struct selabel_handle *rec,
 		    struct selabel_lookup_rec *contexts,
 		    const char *path, unsigned lineno)
 {
@@ -46,8 +47,8 @@ int compat_validate(struct selabel_handle *rec,
 		rc = myinvalidcon(path, lineno, *ctx);
 	else if (mycanoncon)
 		rc = mycanoncon(path, lineno, ctx);
-	else {
-		rc = selabel_validate(rec, contexts);
+	else if (rec->validating) {
+		rc = selabel_validate(contexts);
 		if (rc < 0) {
 			if (lineno) {
 				COMPAT_LOG(SELINUX_WARNING,
@@ -58,7 +59,8 @@ int compat_validate(struct selabel_handle *rec,
 					    "%s: has invalid context %s\n", path, *ctx);
 			}
 		}
-	}
+	} else
+		rc = 0;
 
 	return rc ? -1 : 0;
 }
@@ -78,17 +80,30 @@ static pthread_once_t once = PTHREAD_ONCE_INIT;
 static pthread_key_t destructor_key;
 static int destructor_key_initialized = 0;
 
+static void free_array_elts(void)
+{
+	int i;
+	for (i = 0; i < con_array_used; i++)
+		free(con_array[i]);
+	free(con_array);
+
+	con_array_size = con_array_used = 0;
+	con_array = NULL;
+}
+
 static int add_array_elt(char *con)
 {
+	char **tmp;
 	if (con_array_size) {
 		while (con_array_used >= con_array_size) {
 			con_array_size *= 2;
-			con_array = (char **)realloc(con_array, sizeof(char*) *
-						     con_array_size);
-			if (!con_array) {
-				con_array_size = con_array_used = 0;
+			tmp = (char **)reallocarray(con_array, con_array_size,
+						    sizeof(char*));
+			if (!tmp) {
+				free_array_elts();
 				return -1;
 			}
+			con_array = tmp;
 		}
 	} else {
 		con_array_size = 1000;
@@ -103,13 +118,6 @@ static int add_array_elt(char *con)
 	if (!con_array[con_array_used])
 		return -1;
 	return con_array_used++;
-}
-
-static void free_array_elts(void)
-{
-	con_array_size = con_array_used = 0;
-	free(con_array);
-	con_array = NULL;
 }
 
 void set_matchpathcon_invalidcon(int (*f) (const char *p, unsigned l, char *c))
@@ -195,10 +203,9 @@ int matchpathcon_filespec_add(ino_t ino, int specind, const char *file)
 	struct stat sb;
 
 	if (!fl_head) {
-		fl_head = malloc(sizeof(file_spec_t) * HASH_BUCKETS);
+		fl_head = calloc(HASH_BUCKETS, sizeof(file_spec_t));
 		if (!fl_head)
 			goto oom;
-		memset(fl_head, 0, sizeof(file_spec_t) * HASH_BUCKETS);
 	}
 
 	h = (ino + (ino >> HASH_BITS)) & HASH_MASK;
@@ -209,10 +216,9 @@ int matchpathcon_filespec_add(ino_t ino, int specind, const char *file)
 			if (ret < 0 || sb.st_ino != ino) {
 				fl->specind = specind;
 				free(fl->file);
-				fl->file = malloc(strlen(file) + 1);
+				fl->file = strdup(file);
 				if (!fl->file)
 					goto oom;
-				strcpy(fl->file, file);
 				return fl->specind;
 
 			}
@@ -226,10 +232,9 @@ int matchpathcon_filespec_add(ino_t ino, int specind, const char *file)
 			     __FUNCTION__, file, fl->file,
 			     con_array[fl->specind]);
 			free(fl->file);
-			fl->file = malloc(strlen(file) + 1);
+			fl->file = strdup(file);
 			if (!fl->file)
 				goto oom;
-			strcpy(fl->file, file);
 			return fl->specind;
 		}
 
@@ -242,10 +247,9 @@ int matchpathcon_filespec_add(ino_t ino, int specind, const char *file)
 		goto oom;
 	fl->ino = ino;
 	fl->specind = specind;
-	fl->file = malloc(strlen(file) + 1);
+	fl->file = strdup(file);
 	if (!fl->file)
 		goto oom_freefl;
-	strcpy(fl->file, file);
 	fl->next = prevfl->next;
 	prevfl->next = fl;
 	return fl->specind;
@@ -256,6 +260,35 @@ int matchpathcon_filespec_add(ino_t ino, int specind, const char *file)
 		 __FUNCTION__, file);
 	return -1;
 }
+
+#if (defined(_FILE_OFFSET_BITS) && _FILE_OFFSET_BITS == 64) && defined(__INO64_T_TYPE) && !defined(__INO_T_MATCHES_INO64_T)
+/* alias defined in the public header but we undefine it here */
+#undef matchpathcon_filespec_add
+
+/* ABI backwards-compatible shim for non-LFS 32-bit systems */
+
+static_assert(sizeof(unsigned long) == sizeof(__ino_t), "inode size mismatch");
+static_assert(sizeof(unsigned long) == sizeof(uint32_t), "inode size mismatch");
+static_assert(sizeof(ino_t) == sizeof(ino64_t), "inode size mismatch");
+static_assert(sizeof(ino64_t) == sizeof(uint64_t), "inode size mismatch");
+
+extern int matchpathcon_filespec_add(unsigned long ino, int specind,
+                                     const char *file);
+
+int matchpathcon_filespec_add(unsigned long ino, int specind,
+                              const char *file)
+{
+	return matchpathcon_filespec_add64(ino, specind, file);
+}
+#elif (defined(_FILE_OFFSET_BITS) && _FILE_OFFSET_BITS == 64) || defined(__INO_T_MATCHES_INO64_T)
+
+static_assert(sizeof(uint64_t) == sizeof(ino_t), "inode size mismatch");
+
+#else
+
+static_assert(sizeof(uint32_t) == sizeof(ino_t), "inode size mismatch");
+
+#endif
 
 /*
  * Evaluate the association hash table distribution.
@@ -350,7 +383,7 @@ int matchpathcon_init_prefix(const char *path, const char *subset)
 		mycanoncon = default_canoncon;
 
 	__selinux_once(once, matchpathcon_init_once);
-	__selinux_setspecific(destructor_key, (void *)1);
+	__selinux_setspecific(destructor_key, /* some valid address to please GCC */ &selinux_page_size);
 
 	options[SELABEL_OPT_SUBSET].type = SELABEL_OPT_SUBSET;
 	options[SELABEL_OPT_SUBSET].value = subset;
@@ -387,8 +420,8 @@ int realpath_not_final(const char *name, char *resolved_path)
 
 	tmp_path = strdup(name);
 	if (!tmp_path) {
-		myprintf("symlink_realpath(%s) strdup() failed: %s\n",
-			name, strerror(errno));
+		myprintf("symlink_realpath(%s) strdup() failed: %m\n",
+			name);
 		rc = -1;
 		goto out;
 	}
@@ -408,8 +441,8 @@ int realpath_not_final(const char *name, char *resolved_path)
 	}
 
 	if (!p) {
-		myprintf("symlink_realpath(%s) realpath() failed: %s\n",
-			name, strerror(errno));
+		myprintf("symlink_realpath(%s) realpath() failed: %m\n",
+			name);
 		rc = -1;
 		goto out;
 	}
@@ -477,15 +510,15 @@ void matchpathcon_checkmatches(char *str __attribute__((unused)))
 int selinux_file_context_cmp(const char * a,
 			     const char * b)
 {
-	char *rest_a, *rest_b;	/* Rest of the context after the user */
+	const char *rest_a, *rest_b;	/* Rest of the context after the user */
 	if (!a && !b)
 		return 0;
 	if (!a)
 		return -1;
 	if (!b)
 		return 1;
-	rest_a = strchr((char *)a, ':');
-	rest_b = strchr((char *)b, ':');
+	rest_a = strchr(a, ':');
+	rest_b = strchr(b, ':');
 	if (!rest_a && !rest_b)
 		return 0;
 	if (!rest_a)
@@ -520,8 +553,10 @@ int selinux_file_context_verify(const char *path, mode_t mode)
 			return 0;
 	}
 	
-	if (!hnd && (matchpathcon_init_prefix(NULL, NULL) < 0))
+	if (!hnd && (matchpathcon_init_prefix(NULL, NULL) < 0)){
+			freecon(con);
 			return -1;
+	}
 
 	if (selabel_lookup_raw(hnd, &fcontext, path, mode) != 0) {
 		if (errno != ENOENT)

@@ -1,5 +1,5 @@
 
-/* Author : Stephen Smalley, <sds@tycho.nsa.gov> */
+/* Author : Stephen Smalley, <stephen.smalley.work@gmail.com> */
 
 /*
  * Updated: Yuichi Nakamura <ynakam@hitachisoft.jp>
@@ -48,11 +48,11 @@
 
 #include "debug.h"
 #include "private.h"
-#include "android_m_compat.h"
 
 /* Based on MurmurHash3, written by Austin Appleby and placed in the
  * public domain.
  */
+ignore_unsigned_overflow_
 static inline int avtab_hash(struct avtab_key *keyp, uint32_t mask)
 {
 	static const uint32_t c1 = 0xcc9e2d51;
@@ -64,7 +64,7 @@ static inline int avtab_hash(struct avtab_key *keyp, uint32_t mask)
 
 	uint32_t hash = 0;
 
-#define mix(input) { \
+#define mix(input) do { \
 	uint32_t v = input; \
 	v *= c1; \
 	v = (v << r1) | (v >> (32 - r1)); \
@@ -72,7 +72,7 @@ static inline int avtab_hash(struct avtab_key *keyp, uint32_t mask)
 	hash ^= v; \
 	hash = (hash << r2) | (hash >> (32 - r2)); \
 	hash = hash * m + n; \
-}
+} while (0)
 
 	mix(keyp->target_class);
 	mix(keyp->target_type);
@@ -330,7 +330,7 @@ void avtab_destroy(avtab_t * h)
 	h->mask = 0;
 }
 
-int avtab_map(avtab_t * h,
+int avtab_map(const avtab_t * h,
 	      int (*apply) (avtab_key_t * k,
 			    avtab_datum_t * d, void *args), void *args)
 {
@@ -376,7 +376,7 @@ int avtab_alloc(avtab_t *h, uint32_t nrules)
 	}
 	if (shift > 2)
 		shift = shift - 2;
-	nslot = 1 << shift;
+	nslot = UINT32_C(1) << shift;
 	if (nslot > MAX_AVTAB_HASH_BUCKETS)
 		nslot = MAX_AVTAB_HASH_BUCKETS;
 	mask = nslot - 1;
@@ -419,7 +419,7 @@ void avtab_hash_eval(avtab_t * h, char *tag)
 }
 
 /* Ordering of datums in the original avtab format in the policy file. */
-static uint16_t spec_order[] = {
+static const uint16_t spec_order[] = {
 	AVTAB_ALLOWED,
 	AVTAB_AUDITDENY,
 	AVTAB_AUDITALLOW,
@@ -441,8 +441,6 @@ int avtab_read_item(struct policy_file *fp, uint32_t vers, avtab_t * a,
 	avtab_key_t key;
 	avtab_datum_t datum;
 	avtab_extended_perms_t xperms;
-	unsigned int android_m_compat_optype = 0;
-	unsigned set;
 	unsigned int i;
 	int rc;
 
@@ -504,6 +502,11 @@ int avtab_read_item(struct policy_file *fp, uint32_t vers, avtab_t * a,
 
 		for (i = 0; i < ARRAY_SIZE(spec_order); i++) {
 			if (val & spec_order[i]) {
+				if (items >= items2) { /* items is index, items2 is total number */
+					ERR(fp->handle, "entry has too many items (%d/%d)",
+					    items + 1, items2);
+					return -1;
+				}
 				key.specified = spec_order[i] | enabled;
 				datum.data = le32_to_cpu(buf32[items++]);
 				rc = insertf(a, &key, &datum, p);
@@ -531,27 +534,20 @@ int avtab_read_item(struct policy_file *fp, uint32_t vers, avtab_t * a,
 	key.target_class = le16_to_cpu(buf16[items++]);
 	key.specified = le16_to_cpu(buf16[items++]);
 
-	if ((key.specified & AVTAB_OPTYPE) &&
-			(vers == POLICYDB_VERSION_XPERMS_IOCTL)) {
-		key.specified = avtab_optype_to_xperms(key.specified);
-		android_m_compat_optype = 1;
-		avtab_android_m_compat_set();
+	if (key.specified & ~(AVTAB_AV | AVTAB_TYPE | AVTAB_XPERMS | AVTAB_ENABLED)) {
+		ERR(fp->handle, "invalid specifier");
+		return -1;
 	}
 
-	set = 0;
-	for (i = 0; i < ARRAY_SIZE(spec_order); i++) {
-		if (key.specified & spec_order[i])
-			set++;
-	}
-	if (!set || set > 1) {
-		ERR(fp->handle, "more than one specifier");
+	if (__builtin_popcount(key.specified & ~AVTAB_ENABLED) != 1) {
+		ERR(fp->handle, "not exactly one specifier");
 		return -1;
 	}
 
 	if ((vers < POLICYDB_VERSION_XPERMS_IOCTL) &&
 			(key.specified & AVTAB_XPERMS)) {
 		ERR(fp->handle, "policy version %u does not support extended "
-				"permissions rules and one was specified\n", vers);
+				"permissions rules and one was specified", vers);
 		return -1;
 	} else if (key.specified & AVTAB_XPERMS) {
 		rc = next_entry(&buf8, fp, sizeof(uint8_t));
@@ -560,24 +556,12 @@ int avtab_read_item(struct policy_file *fp, uint32_t vers, avtab_t * a,
 			return -1;
 		}
 		xperms.specified = buf8;
-		if (avtab_android_m_compat ||
-				((xperms.specified != AVTAB_XPERMS_IOCTLFUNCTION) &&
-				(xperms.specified != AVTAB_XPERMS_IOCTLDRIVER) &&
-				(vers == POLICYDB_VERSION_XPERMS_IOCTL))) {
-			xperms.driver = xperms.specified;
-			if (android_m_compat_optype)
-				xperms.specified = AVTAB_XPERMS_IOCTLDRIVER;
-			else
-				xperms.specified = AVTAB_XPERMS_IOCTLFUNCTION;
-			avtab_android_m_compat_set();
-		} else {
-			rc = next_entry(&buf8, fp, sizeof(uint8_t));
-			if (rc < 0) {
-				ERR(fp->handle, "truncated entry");
-				return -1;
-			}
-			xperms.driver = buf8;
+		rc = next_entry(&buf8, fp, sizeof(uint8_t));
+		if (rc < 0) {
+			ERR(fp->handle, "truncated entry");
+			return -1;
 		}
+		xperms.driver = buf8;
 		rc = next_entry(buf32, fp, sizeof(uint32_t)*8);
 		if (rc < 0) {
 			ERR(fp->handle, "truncated entry");
@@ -616,7 +600,7 @@ int avtab_read(avtab_t * a, struct policy_file *fp, uint32_t vers)
 		goto bad;
 	}
 	nel = le32_to_cpu(buf[0]);
-	if (!nel) {
+	if (zero_or_saturated(nel) || exceeds_available_bytes(fp, nel, sizeof(uint32_t) * 3)) {
 		ERR(fp->handle, "table is empty");
 		goto bad;
 	}

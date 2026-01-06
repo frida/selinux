@@ -32,9 +32,11 @@ CFLAGS ?= -O -Wall -W -Wundef -Wformat-y2k -Wformat-security -Winit-self -Wmissi
           -Wno-missing-field-initializers -Wno-sign-compare \
           -Wno-format-nonliteral -Wframe-larger-than=$(MAX_STACK_SIZE) -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2 \
           -fstack-protector-all --param=ssp-buffer-size=4 -fexceptions \
-          -fasynchronous-unwind-tables -fdiagnostics-show-option -funit-at-a-time \
+          -fasynchronous-unwind-tables -fdiagnostics-show-option \
           -Werror -Wno-aggregate-return -Wno-redundant-decls -Wstrict-overflow=5 \
           $(EXTRA_CFLAGS)
+
+override CFLAGS += $(LFS_CFLAGS)
 
 ifeq ($(OS), Darwin)
 override CFLAGS += -I/opt/local/include -I../../libsepol/include
@@ -44,7 +46,6 @@ endif
 override CFLAGS += -I../include -D_GNU_SOURCE $(DISABLE_FLAGS) $(PCRE_CFLAGS)
 override LDFLAGS += -L../src
 override LDLIBS += -lselinux $(FTS_LDLIBS)
-PCRE_LDLIBS ?= -lpcre
 
 ifeq ($(ANDROID_HOST),y)
 TARGETS=sefcontext_compile
@@ -52,9 +53,13 @@ else
 TARGETS=$(patsubst %.c,%,$(sort $(wildcard *.c)))
 endif
 
-sefcontext_compile: LDLIBS += $(PCRE_LDLIBS) ../src/libselinux.a -lsepol
+sefcontext_compile: LDLIBS += ../src/libselinux.a -lsepol
 
-sefcontext_compile: sefcontext_compile.o ../src/regex.o
+PCRE_USERS = matchpathcon sefcontext_compile selabel_compare \
+	selabel_digest selabel_get_digests_all_partial_matches \
+	selabel_lookup selabel_lookup_best_match \
+	selabel_partial_match
+$(PCRE_USERS): LDLIBS += $(PCRE_LDLIBS)
 
 all: $(TARGETS)
 
@@ -67,8 +72,4 @@ clean:
 
 distclean: clean
 
-indent:
-	../../scripts/Lindent $(wildcard *.[ch])
-
 relabel:
-

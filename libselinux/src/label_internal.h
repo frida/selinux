@@ -63,7 +63,7 @@ struct selabel_digest {
 };
 
 extern int digest_add_specfile(struct selabel_digest *digest, FILE *fp,
-						    char *from_addr,
+						    const char *from_addr,
 						    size_t buf_len,
 						    const char *path);
 extern void digest_gen_hash(struct selabel_digest *digest);
@@ -71,8 +71,9 @@ extern void digest_gen_hash(struct selabel_digest *digest);
 struct selabel_lookup_rec {
 	char * ctx_raw;
 	char * ctx_trans;
-	int validated;
-	unsigned lineno;
+	pthread_mutex_t lock;	/* lock for validation and translation */
+	unsigned int lineno;
+	bool validated;
 };
 
 struct selabel_handle {
@@ -98,8 +99,8 @@ struct selabel_handle {
 						    const char *key,
 						    const char **aliases,
 						    int type);
-	enum selabel_cmp_result (*func_cmp)(struct selabel_handle *h1,
-					    struct selabel_handle *h2);
+	enum selabel_cmp_result (*func_cmp)(const struct selabel_handle *h1,
+					    const struct selabel_handle *h2);
 
 	/* supports backend-specific state information */
 	void *data;
@@ -118,8 +119,7 @@ struct selabel_handle {
  * Validation function
  */
 extern int
-selabel_validate(struct selabel_handle *rec,
-		 struct selabel_lookup_rec *contexts) ;
+selabel_validate(struct selabel_lookup_rec *contexts);
 
 /*
  * Compatibility support
@@ -128,13 +128,15 @@ extern int myprintf_compat;
 extern void __attribute__ ((format(printf, 1, 2)))
 (*myprintf) (const char *fmt, ...) ;
 
-#define COMPAT_LOG(type, fmt...) if (myprintf_compat)	  \
-		myprintf(fmt);				  \
-	else						  \
-		selinux_log(type, fmt);
+#define COMPAT_LOG(type, fmt...) do {			\
+	if (myprintf_compat)				\
+		myprintf(fmt);				\
+	else						\
+		selinux_log(type, fmt);			\
+	} while (0)
 
 extern int
-compat_validate(struct selabel_handle *rec,
+compat_validate(const struct selabel_handle *rec,
 		struct selabel_lookup_rec *contexts,
 		const char *path, unsigned lineno) ;
 
@@ -142,6 +144,6 @@ compat_validate(struct selabel_handle *rec,
  * The read_spec_entries function may be used to
  * replace sscanf to read entries from spec files.
  */
-extern int read_spec_entries(char *line_buf, const char **errbuf, int num_args, ...);
+extern int read_spec_entries(char *line_buf, size_t nread, const char **errbuf, int num_args, ...);
 
 #endif				/* _SELABEL_INTERNAL_H_ */

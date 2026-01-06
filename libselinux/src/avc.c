@@ -4,7 +4,7 @@
  * Author : Eamon Walsh <ewalsh@epoch.ncsc.mil>
  *
  * Derived from the kernel AVC implementation by
- * Stephen Smalley <sds@tycho.nsa.gov> and
+ * Stephen Smalley <stephen.smalley.work@gmail.com> and
  * James Morris <jmorris@redhat.com>.
  */
 #include <selinux/avc.h>
@@ -206,19 +206,18 @@ static int avc_init_internal(const char *prefix,
 		rc = security_getenforce();
 		if (rc < 0) {
 			avc_log(SELINUX_ERROR,
-				"%s:  could not determine enforcing mode: %s\n",
-				avc_prefix,
-				strerror(errno));
+				"%s:  could not determine enforcing mode: %m\n",
+				avc_prefix);
 			goto out;
 		}
 		avc_enforcing = rc;
 	}
 
-	rc = selinux_status_open(1);
+	rc = selinux_status_open(0);
 	if (rc < 0) {
 		avc_log(SELINUX_ERROR,
-			"%s: could not open selinux status page: %d (%s)\n",
-			avc_prefix, errno, strerror(errno));
+			"%s: could not open selinux status page: %d (%m)\n",
+			avc_prefix, errno);
 		goto out;
 	}
 	avc_running = 1;
@@ -226,17 +225,19 @@ static int avc_init_internal(const char *prefix,
 	return rc;
 }
 
-int avc_open(struct selinux_opt *opts, unsigned nopts)
+int avc_open(const struct selinux_opt *opts, unsigned nopts)
 {
 	avc_setenforce = 0;
 
-	while (nopts--)
+	while (nopts) {
+		nopts--;
 		switch(opts[nopts].type) {
 		case AVC_OPT_SETENFORCE:
 			avc_setenforce = 1;
 			avc_enforcing = !!opts[nopts].value;
 			break;
 		}
+	}
 
 	return avc_init_internal("avc", NULL, NULL, NULL, NULL);
 }
@@ -726,7 +727,6 @@ void avc_audit(security_id_t ssid, security_id_t tsid,
 	if (denied)
 		log_append(avc_audit_buf, " permissive=%u", result ? 0 : 1);
 
-	log_append(avc_audit_buf, "\n");
 	avc_log(SELINUX_AVC, "%s", avc_audit_buf);
 
 	avc_release_lock(avc_log_lock);

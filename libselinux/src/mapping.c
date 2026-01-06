@@ -31,7 +31,7 @@ static security_class_t current_mapping_size = 0;
  */
 
 int
-selinux_set_mapping(struct security_class_mapping *map)
+selinux_set_mapping(const struct security_class_mapping *map)
 {
 	size_t size = sizeof(struct selinux_mapping);
 	security_class_t i, j;
@@ -64,7 +64,7 @@ selinux_set_mapping(struct security_class_mapping *map)
 	/* Store the raw class and permission values */
 	j = 0;
 	while (map[j].name) {
-		struct security_class_mapping *p_in = map + (j++);
+		const struct security_class_mapping *p_in = map + (j++);
 		struct selinux_mapping *p_out = current_mapping + j;
 
 		p_out->value = string_to_security_class(p_in->name);
@@ -144,9 +144,9 @@ unmap_perm(security_class_t tclass, access_vector_t tperm)
 		access_vector_t kperm = 0;
 
 		for (i = 0; i < current_mapping[tclass].num_perms; i++)
-			if (tperm & (1<<i)) {
+			if (tperm & (UINT32_C(1)<<i)) {
 				kperm |= current_mapping[tclass].perms[i];
-				tperm &= ~(1<<i);
+				tperm &= ~(UINT32_C(1)<<i);
 			}
 		return kperm;
 	}
@@ -191,7 +191,7 @@ map_perm(security_class_t tclass, access_vector_t kperm)
 
 		for (i = 0; i < current_mapping[tclass].num_perms; i++)
 			if (kperm & current_mapping[tclass].perms[i]) {
-				tperm |= 1<<i;
+				tperm |= UINT32_C(1)<<i;
 				kperm &= ~current_mapping[tclass].perms[i];
 			}
 
@@ -216,30 +216,30 @@ map_decision(security_class_t tclass, struct av_decision *avd)
 
 		for (i = 0, result = 0; i < n; i++) {
 			if (avd->allowed & mapping->perms[i])
-				result |= 1<<i;
+				result |= UINT32_C(1)<<i;
 			else if (allow_unknown && !mapping->perms[i])
-				result |= 1<<i;
+				result |= UINT32_C(1)<<i;
 		}
 		avd->allowed = result;
 
 		for (i = 0, result = 0; i < n; i++) {
 			if (avd->decided & mapping->perms[i])
-				result |= 1<<i;
+				result |= UINT32_C(1)<<i;
 			else if (allow_unknown && !mapping->perms[i])
-				result |= 1<<i;
+				result |= UINT32_C(1)<<i;
 		}
 		avd->decided = result;
 
 		for (i = 0, result = 0; i < n; i++)
 			if (avd->auditallow & mapping->perms[i])
-				result |= 1<<i;
+				result |= UINT32_C(1)<<i;
 		avd->auditallow = result;
 
 		for (i = 0, result = 0; i < n; i++) {
 			if (avd->auditdeny & mapping->perms[i])
-				result |= 1<<i;
+				result |= UINT32_C(1)<<i;
 			else if (!allow_unknown && !mapping->perms[i])
-				result |= 1<<i;
+				result |= UINT32_C(1)<<i;
 		}
 
 		/*
@@ -248,7 +248,7 @@ map_decision(security_class_t tclass, struct av_decision *avd)
 		 * a bug in the object manager.
 		 */
 		for (; i < (sizeof(result)*8); i++)
-			result |= 1<<i;
+			result |= UINT32_C(1)<<i;
 		avd->auditdeny = result;
 	}
 }

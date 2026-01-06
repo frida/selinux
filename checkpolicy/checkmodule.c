@@ -31,11 +31,7 @@
 #include <sepol/policydb/sidtab.h>
 
 #include "queue.h"
-#include "checkpolicy.h"
 #include "parse_util.h"
-
-extern char *optarg;
-extern int optind;
 
 static sidtab_t sidtab;
 
@@ -45,9 +41,6 @@ extern int werror;
 static int handle_unknown = SEPOL_DENY_UNKNOWN;
 static const char *txtfile = "policy.conf";
 static const char *binfile = "policy";
-
-unsigned int policy_type = POLICY_BASE;
-unsigned int policyvers = MOD_POLICYDB_VERSION_MAX;
 
 static int read_binary_policy(policydb_t * p, const char *file, const char *progname)
 {
@@ -110,7 +103,7 @@ static int read_binary_policy(policydb_t * p, const char *file, const char *prog
 	return 0;
 }
 
-static int write_binary_policy(policydb_t * p, FILE *outfp)
+static int write_binary_policy(policydb_t * p, FILE *outfp, unsigned int policy_type, unsigned int policyvers)
 {
 	struct policy_file pf;
 
@@ -126,7 +119,7 @@ static int write_binary_policy(policydb_t * p, FILE *outfp)
 
 static __attribute__((__noreturn__)) void usage(const char *progname)
 {
-	printf("usage:  %s [-h] [-V] [-b] [-C] [-E] [-U handle_unknown] [-m] [-M] [-o FILE] [INPUT]\n", progname);
+	printf("usage:  %s [-h] [-V] [-b] [-C] [-E] [-U handle_unknown] [-m] [-M] [-N] [-L] [-o FILE] [-c VERSION] [INPUT]\n", progname);
 	printf("Build base and policy modules.\n");
 	printf("Options:\n");
 	printf("  INPUT      build module from INPUT (else read from \"%s\")\n",
@@ -142,6 +135,8 @@ static __attribute__((__noreturn__)) void usage(const char *progname)
 	printf("               allow: Allow unknown kernel checks\n");
 	printf("  -m         build a policy module instead of a base module\n");
 	printf("  -M         enable MLS policy\n");
+	printf("  -N         do not check neverallow rules\n");
+	printf("  -L         output line markers for allow rules\n");
 	printf("  -o FILE    write module to FILE (else just check syntax)\n");
 	printf("  -c VERSION build a policy module targeting a modular policy version (%d-%d)\n",
 	       MOD_POLICYDB_VERSION_MIN, MOD_POLICYDB_VERSION_MAX);
@@ -151,23 +146,28 @@ static __attribute__((__noreturn__)) void usage(const char *progname)
 int main(int argc, char **argv)
 {
 	const char *file = txtfile, *outfile = NULL;
-	unsigned int binary = 0, cil = 0;
+	unsigned int binary = 0, cil = 0, disable_neverallow = 0;
+	unsigned int line_marker_for_allow = 0;
+	unsigned int policy_type = POLICY_BASE;
+	unsigned int policyvers = MOD_POLICYDB_VERSION_MAX;
 	int ch;
 	int show_version = 0;
 	policydb_t modpolicydb;
-	struct option long_options[] = {
+	const struct option long_options[] = {
 		{"help", no_argument, NULL, 'h'},
 		{"output", required_argument, NULL, 'o'},
 		{"binary", no_argument, NULL, 'b'},
 		{"version", no_argument, NULL, 'V'},
 		{"handle-unknown", required_argument, NULL, 'U'},
 		{"mls", no_argument, NULL, 'M'},
+		{"disable-neverallow", no_argument, NULL, 'N'},
+		{"line-marker-for-allow", no_argument, NULL, 'L'},
 		{"cil", no_argument, NULL, 'C'},
 		{"werror", no_argument, NULL, 'E'},
 		{NULL, 0, NULL, 0}
 	};
 
-	while ((ch = getopt_long(argc, argv, "ho:bVEU:mMCc:", long_options, NULL)) != -1) {
+	while ((ch = getopt_long(argc, argv, "ho:bVEU:mMNCc:L", long_options, NULL)) != -1) {
 		switch (ch) {
 		case 'h':
 			usage(argv[0]);
@@ -205,6 +205,9 @@ int main(int argc, char **argv)
 		case 'M':
 			mlspol = 1;
 			break;
+		case 'N':
+			disable_neverallow = 1;
+			break;
 		case 'C':
 			cil = 1;
 			break;
@@ -231,6 +234,9 @@ int main(int argc, char **argv)
 			policyvers = n;
 			break;
 		}
+		case 'L':
+			line_marker_for_allow = 1;
+			break;
 		default:
 			usage(argv[0]);
 		}
@@ -249,6 +255,11 @@ int main(int argc, char **argv)
 
 	if (binary && (policy_type != POLICY_BASE)) {
 		fprintf(stderr, "%s:  -b and -m are incompatible with each other.\n", argv[0]);
+		exit(1);
+	}
+
+	if (line_marker_for_allow && !cil) {
+		fprintf(stderr, "%s:  -L must be used along with -C.\n", argv[0]);
 		exit(1);
 	}
 
@@ -271,31 +282,34 @@ int main(int argc, char **argv)
 	} else {
 		if (policydb_init(&modpolicydb)) {
 			fprintf(stderr, "%s: out of memory!\n", argv[0]);
-			return -1;
+			exit(1);
 		}
 
 		modpolicydb.policy_type = policy_type;
 		modpolicydb.mls = mlspol;
 		modpolicydb.handle_unknown = handle_unknown;
+		modpolicydb.policyvers = policyvers;
 
 		if (read_source_policy(&modpolicydb, file, argv[0]) == -1) {
 			exit(1);
 		}
 
 		if (hierarchy_check_constraints(NULL, &modpolicydb)) {
-			return -1;
+			exit(1);
 		}
 	}
 
 	if (policy_type != POLICY_BASE && outfile) {
+		char *out_name;
+		char *separator;
 		char *mod_name = modpolicydb.name;
 		char *out_path = strdup(outfile);
 		if (out_path == NULL) {
 			fprintf(stderr, "%s:  out of memory\n", argv[0]);
 			exit(1);
 		}
-		char *out_name = basename(out_path);
-		char *separator = strrchr(out_name, '.');
+		out_name = basename(out_path);
+		separator = strrchr(out_name, '.');
 		if (separator) {
 			*separator = '\0';
 		}
@@ -318,7 +332,7 @@ int main(int argc, char **argv)
 			fprintf(stderr, "%s:  link modules failed\n", argv[0]);
 			exit(1);
 		}
-		if (expand_module(NULL, &modpolicydb, &kernpolicydb, 0, 1)) {
+		if (expand_module(NULL, &modpolicydb, &kernpolicydb, /*verbose=*/0, !disable_neverallow)) {
 			fprintf(stderr, "%s:  expand module failed\n", argv[0]);
 			exit(1);
 		}
@@ -334,23 +348,29 @@ int main(int argc, char **argv)
 		FILE *outfp = fopen(outfile, "w");
 
 		if (!outfp) {
-			perror(outfile);
+			fprintf(stderr, "%s:  error opening %s:  %s\n", argv[0], outfile, strerror(errno));
 			exit(1);
 		}
 
 		if (!cil) {
-			if (write_binary_policy(&modpolicydb, outfp) != 0) {
+			if (write_binary_policy(&modpolicydb, outfp, policy_type, policyvers) != 0) {
 				fprintf(stderr, "%s:  error writing %s\n", argv[0], outfile);
 				exit(1);
 			}
 		} else {
+			if (line_marker_for_allow) {
+				modpolicydb.line_marker_avrules |= AVRULE_ALLOWED | AVRULE_XPERMS_ALLOWED;
+			}
 			if (sepol_module_policydb_to_cil(outfp, &modpolicydb, 0) != 0) {
 				fprintf(stderr, "%s:  error writing %s\n", argv[0], outfile);
 				exit(1);
 			}
 		}
 
-		fclose(outfp);
+		if (fclose(outfp)) {
+			fprintf(stderr, "%s:  error closing %s:  %s\n", argv[0], outfile, strerror(errno));
+			exit(1);
+		}
 	} else if (cil) {
 		fprintf(stderr, "%s:  No file to write CIL was specified\n", argv[0]);
 		exit(1);

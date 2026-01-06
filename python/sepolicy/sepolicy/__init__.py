@@ -4,7 +4,6 @@
 
 import errno
 import selinux
-import setools
 import glob
 import sepolgen.defaults as defaults
 import sepolgen.interfaces as interfaces
@@ -13,16 +12,28 @@ import os
 import re
 import gzip
 
-PROGNAME = "policycoreutils"
+from setools.boolquery import BoolQuery
+from setools.portconquery import PortconQuery
+from setools.policyrep import SELinuxPolicy
+from setools.objclassquery import ObjClassQuery
+from setools.rbacrulequery import RBACRuleQuery
+from setools.rolequery import RoleQuery
+from setools.terulequery import TERuleQuery
+from setools.typeattrquery import TypeAttributeQuery
+from setools.typequery import TypeQuery
+from setools.userquery import UserQuery
+
+PROGNAME = "selinux-python"
 try:
     import gettext
     kwargs = {}
     if sys.version_info < (3,):
         kwargs['unicode'] = True
-    gettext.install(PROGNAME,
+    t = gettext.translation(PROGNAME,
                     localedir="/usr/share/locale",
-                    codeset='utf-8',
-                    **kwargs)
+                    **kwargs,
+                    fallback=True)
+    _ = t.gettext
 except:
     try:
         import builtins
@@ -114,6 +125,7 @@ all_attributes = None
 booleans = None
 booleans_dict = None
 all_allow_rules = None
+all_bool_rules = None
 all_transitions = None
 
 
@@ -168,7 +180,7 @@ def policy(policy_file):
     global _pol
 
     try:
-        _pol = setools.SELinuxPolicy(policy_file)
+        _pol = SELinuxPolicy(policy_file)
     except:
         raise ValueError(_("Failed to read %s policy file") % policy_file)
 
@@ -178,17 +190,16 @@ def load_store_policy(store):
         return None
     policy(policy_file)
 
-try:
+def init_policy():
     policy_file = get_installed_policy()
     policy(policy_file)
-except ValueError as e:
-    if selinux.is_selinux_enabled() == 1:
-        raise e
-
 
 def info(setype, name=None):
+    if not _pol:
+        init_policy()
+
     if setype == TYPE:
-        q = setools.TypeQuery(_pol)
+        q = TypeQuery(_pol)
         q.name = name
         results = list(q.results())
 
@@ -206,7 +217,7 @@ def info(setype, name=None):
         } for x in results)
 
     elif setype == ROLE:
-        q = setools.RoleQuery(_pol)
+        q = RoleQuery(_pol)
         if name:
             q.name = name
 
@@ -217,7 +228,7 @@ def info(setype, name=None):
         } for x in q.results())
 
     elif setype == ATTRIBUTE:
-        q = setools.TypeAttributeQuery(_pol)
+        q = TypeAttributeQuery(_pol)
         if name:
             q.name = name
 
@@ -227,7 +238,7 @@ def info(setype, name=None):
         } for x in q.results())
 
     elif setype == PORT:
-        q = setools.PortconQuery(_pol)
+        q = PortconQuery(_pol)
         if name:
             ports = [int(i) for i in name.split("-")]
             if len(ports) == 2:
@@ -251,7 +262,7 @@ def info(setype, name=None):
         } for x in q.results())
 
     elif setype == USER:
-        q = setools.UserQuery(_pol)
+        q = UserQuery(_pol)
         if name:
             q.name = name
 
@@ -268,7 +279,7 @@ def info(setype, name=None):
         } for x in q.results())
 
     elif setype == BOOLEAN:
-        q = setools.BoolQuery(_pol)
+        q = BoolQuery(_pol)
         if name:
             q.name = name
 
@@ -278,7 +289,7 @@ def info(setype, name=None):
         } for x in q.results())
 
     elif setype == TCLASS:
-        q = setools.ObjClassQuery(_pol)
+        q = ObjClassQuery(_pol)
         if name:
             q.name = name
 
@@ -324,7 +335,12 @@ def _setools_rule_to_dict(rule):
         pass
 
     try:
-        d['boolean'] = [(str(rule.conditional), enabled)]
+        d['booleans'] = [(str(b), b.state) for b in rule.conditional.booleans]
+    except AttributeError:
+        pass
+
+    try:
+        d['conditional'] = str(rule.conditional)
     except AttributeError:
         pass
 
@@ -337,6 +353,8 @@ def _setools_rule_to_dict(rule):
 
 
 def search(types, seinfo=None):
+    if not _pol:
+        init_policy()
     if not seinfo:
         seinfo = {}
     valid_types = set([ALLOW, AUDITALLOW, NEVERALLOW, DONTAUDIT, TRANSITION, ROLE_ALLOW])
@@ -369,11 +387,11 @@ def search(types, seinfo=None):
         tertypes.append(DONTAUDIT)
 
     if len(tertypes) > 0:
-        q = setools.TERuleQuery(_pol,
-                                ruletype=tertypes,
-                                source=source,
-                                target=target,
-                                tclass=tclass)
+        q = TERuleQuery(_pol,
+                        ruletype=tertypes,
+                        source=source,
+                        target=target,
+                        tclass=tclass)
 
         if PERMS in seinfo:
             q.perms = seinfo[PERMS]
@@ -382,11 +400,11 @@ def search(types, seinfo=None):
 
     if TRANSITION in types:
         rtypes = ['type_transition', 'type_change', 'type_member']
-        q = setools.TERuleQuery(_pol,
-                                ruletype=rtypes,
-                                source=source,
-                                target=target,
-                                tclass=tclass)
+        q = TERuleQuery(_pol,
+                        ruletype=rtypes,
+                        source=source,
+                        target=target,
+                        tclass=tclass)
 
         if PERMS in seinfo:
             q.perms = seinfo[PERMS]
@@ -395,11 +413,11 @@ def search(types, seinfo=None):
 
     if ROLE_ALLOW in types:
         ratypes = ['allow']
-        q = setools.RBACRuleQuery(_pol,
-                                  ruletype=ratypes,
-                                  source=source,
-                                  target=target,
-                                  tclass=tclass)
+        q = RBACRuleQuery(_pol,
+                          ruletype=ratypes,
+                          source=source,
+                          target=target,
+                          tclass=tclass)
 
         for r in q.results():
             toret.append({'source': str(r.source),
@@ -426,29 +444,29 @@ def get_conditionals(src, dest, tclass, perm):
                 x['source'] in src_list and
                 x['target'] in dest_list and
                 set(perm).issubset(x[PERMS]) and
-                'boolean' in x,
+                'conditional' in x,
                 get_all_allow_rules()))
 
     try:
         for i in allows:
-            tdict.update({'source': i['source'], 'boolean': i['boolean']})
+            tdict.update({'source': i['source'], 'conditional': (i['conditional'], i['enabled'])})
             if tdict not in tlist:
                 tlist.append(tdict)
                 tdict = {}
     except KeyError:
-        return(tlist)
+        return tlist
 
-    return (tlist)
+    return tlist
 
 
 def get_conditionals_format_text(cond):
 
     enabled = False
     for x in cond:
-        if x['boolean'][0][1]:
+        if x['conditional'][1]:
             enabled = True
             break
-    return _("-- Allowed %s [ %s ]") % (enabled, " || ".join(set(map(lambda x: "%s=%d" % (x['boolean'][0][0], x['boolean'][0][1]), cond))))
+    return _("-- Allowed %s [ %s ]") % (enabled, " || ".join(set(map(lambda x: "%s=%d" % (x['conditional'][0], x['conditional'][1]), cond))))
 
 
 def get_types_from_attribute(attribute):
@@ -702,9 +720,9 @@ def get_boolean_rules(setype, boolean):
     boollist = []
     permlist = search([ALLOW], {'source': setype})
     for p in permlist:
-        if "boolean" in p:
+        if "booleans" in p:
             try:
-                for b in p["boolean"]:
+                for b in p["booleans"]:
                     if boolean in b:
                         boollist.append(p)
             except:
@@ -717,11 +735,11 @@ def get_all_entrypoints():
 
 
 def get_entrypoint_types(setype):
-    q = setools.TERuleQuery(_pol,
-                            ruletype=[ALLOW],
-                            source=setype,
-                            tclass=["file"],
-                            perms=["entrypoint"])
+    q = TERuleQuery(_pol,
+                    ruletype=[ALLOW],
+                    source=setype,
+                    tclass=["file"],
+                    perms=["entrypoint"])
     return [str(x.target) for x in q.results() if x.source == setype]
 
 
@@ -736,10 +754,10 @@ def get_init_transtype(path):
 
 
 def get_init_entrypoint(transtype):
-    q = setools.TERuleQuery(_pol,
-                            ruletype=["type_transition"],
-                            source="init_t",
-                            tclass=["process"])
+    q = TERuleQuery(_pol,
+                    ruletype=["type_transition"],
+                    source="init_t",
+                    tclass=["process"])
     entrypoints = []
     for i in q.results():
         try:
@@ -751,10 +769,10 @@ def get_init_entrypoint(transtype):
     return entrypoints
 
 def get_init_entrypoints_str():
-    q = setools.TERuleQuery(_pol,
-                            ruletype=["type_transition"],
-                            source="init_t",
-                            tclass=["process"])
+    q = TERuleQuery(_pol,
+                    ruletype=["type_transition"],
+                    source="init_t",
+                    tclass=["process"])
     entrypoints = {}
     for i in q.results():
         try:
@@ -834,7 +852,7 @@ def get_all_role_allows():
         return role_allows
     role_allows = {}
 
-    q = setools.RBACRuleQuery(_pol, ruletype=[ALLOW])
+    q = RBACRuleQuery(_pol, ruletype=[ALLOW])
     for r in q.results():
         src = str(r.source)
         tgt = str(r.target)
@@ -916,7 +934,10 @@ def get_all_roles():
     if roles:
         return roles
 
-    q = setools.RoleQuery(_pol)
+    if not _pol:
+        init_policy()
+
+    q = RoleQuery(_pol)
     roles = [str(x) for x in q.results() if str(x) != "object_r"]
     return roles
 
@@ -1032,7 +1053,7 @@ def get_description(f, markup=markup):
         return txt + "treat the files as %s key data." % prettyprint(f, "_key_t")
 
     if f.endswith("_secret_t"):
-        return txt + "treat the files as %s secret data." % prettyprint(f, "_key_t")
+        return txt + "treat the files as %s secret data." % prettyprint(f, "_secret_t")
 
     if f.endswith("_ra_t"):
         return txt + "treat the files as %s read/append content." % prettyprint(f, "_ra_t")
@@ -1064,7 +1085,7 @@ def get_description(f, markup=markup):
     if f.endswith("_tmp_t"):
         return txt + "store %s temporary files in the /tmp directories." % prettyprint(f, "_tmp_t")
     if f.endswith("_etc_t"):
-        return txt + "store %s files in the /etc directories." % prettyprint(f, "_tmp_t")
+        return txt + "store %s files in the /etc directories." % prettyprint(f, "_etc_t")
     if f.endswith("_home_t"):
         return txt + "store %s files in the users home directory." % prettyprint(f, "_home_t")
     if f.endswith("_tmpfs_t"):
@@ -1113,6 +1134,14 @@ def get_all_allow_rules():
         all_allow_rules = search([ALLOW])
     return all_allow_rules
 
+def get_all_bool_rules():
+    global all_bool_rules
+    if not all_bool_rules:
+        q = TERuleQuery(_pol, boolean=".*", boolean_regex=True,
+                                ruletype=[ALLOW, DONTAUDIT])
+        all_bool_rules = [_setools_rule_to_dict(x) for x in q.results()]
+    return all_bool_rules
+
 def get_all_transitions():
     global all_transitions
     if not all_transitions:
@@ -1123,7 +1152,7 @@ def get_bools(setype):
     bools = []
     domainbools = []
     domainname, short_name = gen_short_name(setype)
-    for i in map(lambda x: x['boolean'], filter(lambda x: 'boolean' in x and x['source'] == setype, get_all_allow_rules())):
+    for i in map(lambda x: x['booleans'], filter(lambda x: 'booleans' in x and x['source'] == setype, get_all_bool_rules())):
         for b in i:
             if not isinstance(b, tuple):
                 continue
@@ -1204,31 +1233,19 @@ def boolean_desc(boolean):
         return _(booleans_dict[boolean][2])
     else:
         desc = boolean.split("_")
-        return "Allow %s to %s" % (desc[0], " ".join(desc[1:]))
+        return _("Allow {subject} to {rest}").format(subject=desc[0], rest=" ".join(desc[1:]))
 
 
 def get_os_version():
-    os_version = ""
-    pkg_name = "selinux-policy"
+    import subprocess
+    system_release = ""
     try:
-        try:
-            from commands import getstatusoutput
-        except ImportError:
-            from subprocess import getstatusoutput
-        rc, output = getstatusoutput("rpm -q '%s'" % pkg_name)
-        if rc == 0:
-            os_version = output.split(".")[-2]
-    except:
-        os_version = ""
+        import distro
+        system_release = distro.name(pretty=True)
+    except (ModuleNotFoundError, OSError, IOError, UnicodeError, subprocess.CalledProcessError):
+        system_release = "Misc"
 
-    if os_version[0:2] == "fc":
-        os_version = "Fedora" + os_version[2:]
-    elif os_version[0:2] == "el":
-        os_version = "RHEL" + os_version[2:]
-    else:
-        os_version = ""
-
-    return os_version
+    return system_release
 
 
 def reinit():

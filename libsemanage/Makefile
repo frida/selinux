@@ -1,22 +1,22 @@
-all: 
+all:
 	$(MAKE) -C src all
 
 swigify:
 	$(MAKE) -C src swigify
 
-pywrap: 
+pywrap:
 	$(MAKE) -C src pywrap
 
 rubywrap:
 	$(MAKE) -C src rubywrap
 
-install: 
+install:
 	$(MAKE) -C include install
 	$(MAKE) -C src install
 	$(MAKE) -C man install
 	$(MAKE) -C utils install
 
-install-pywrap: 
+install-pywrap:
 	$(MAKE) -C src install-pywrap
 
 install-rubywrap:
@@ -28,10 +28,6 @@ relabel:
 clean distclean:
 	$(MAKE) -C src $@
 	$(MAKE) -C tests $@
-
-indent:
-	$(MAKE) -C src $@
-	$(MAKE) -C include $@
 
 test: all
 	$(MAKE) -C tests test

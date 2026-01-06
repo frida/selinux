@@ -1,4 +1,4 @@
-#!/usr/bin/python3 -Es
+#!/usr/bin/python3 -EsI
 #
 # system-config-selinux.py - GUI for SELinux Config tool in system-config-selinux
 #
@@ -32,6 +32,8 @@ except RuntimeError as e:
     print("This is a graphical application and requires DISPLAY to be set.")
     sys.exit(1)
 
+sys.path.append('/usr/share/system-config-selinux')
+
 from gi.repository import GObject
 import statusPage
 import booleansPage
@@ -45,16 +47,17 @@ import selinux
 ##
 ## I18N
 ##
-PROGNAME = "policycoreutils"
+PROGNAME = "selinux-gui"
 try:
     import gettext
     kwargs = {}
     if sys.version_info < (3,):
         kwargs['unicode'] = True
-    gettext.install(PROGNAME,
+    t = gettext.translation(PROGNAME,
                     localedir="/usr/share/locale",
-                    codeset='utf-8',
-                    **kwargs)
+                    **kwargs,
+                    fallback=True)
+    _ = t.gettext
 except:
     try:
         import builtins
@@ -64,8 +67,6 @@ except:
         __builtin__.__dict__['_'] = unicode
 
 version = "1.0"
-
-sys.path.append('/usr/share/system-config-selinux')
 
 
 ##

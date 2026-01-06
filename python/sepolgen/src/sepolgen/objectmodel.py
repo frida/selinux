@@ -59,7 +59,7 @@ implicitly_typed_objects = ["socket", "fd", "process", "file", "lnk_file", "fifo
 # to and object ("write") or to a subject from an object ("read"). Read
 # or write is described from the subject point-of-view. It is also possible
 # for a permission to represent both a read and write (though the flow is
-# typical asymettric in terms of bandwidth). It is also possible for
+# typical asymmetric in terms of bandwidth). It is also possible for
 # permission to not flow information (meaning that the result is pure
 # side-effect).
 #
@@ -95,7 +95,7 @@ class PermMappings:
     """The information flow properties of a set of object classes and permissions.
 
     PermMappings maps one or more classes and permissions to their PermMap objects
-    describing their information flow charecteristics.
+    describing their information flow characteristics.
     """
     def __init__(self):
         self.classes = { }

@@ -1,5 +1,5 @@
 
-/* Author : Stephen Smalley, <sds@tycho.nsa.gov> */
+/* Author : Stephen Smalley, <stephen.smalley.work@gmail.com> */
 
 /* FLASK */
 
@@ -15,6 +15,7 @@
 #include <sepol/policydb/sidtab.h>
 
 #include "flask.h"
+#include "private.h"
 
 #define SIDTAB_HASH(sid) \
 (sid & SIDTAB_HASH_MASK)
@@ -25,13 +26,9 @@
 
 int sepol_sidtab_init(sidtab_t * s)
 {
-	int i;
-
-	s->htable = malloc(sizeof(sidtab_ptr_t) * SIDTAB_SIZE);
+	s->htable = calloc(SIDTAB_SIZE, sizeof(sidtab_ptr_t));
 	if (!s->htable)
 		return -ENOMEM;
-	for (i = 0; i < SIDTAB_SIZE; i++)
-		s->htable[i] = (sidtab_ptr_t) NULL;
 	s->nel = 0;
 	s->next_sid = 1;
 	s->shutdown = 0;
@@ -81,37 +78,6 @@ int sepol_sidtab_insert(sidtab_t * s, sepol_security_id_t sid,
 	s->nel++;
 	if (sid >= s->next_sid)
 		s->next_sid = sid + 1;
-	return 0;
-}
-
-int sepol_sidtab_remove(sidtab_t * s, sepol_security_id_t sid)
-{
-	int hvalue;
-	sidtab_node_t *cur, *last;
-
-	if (!s || !s->htable)
-		return -ENOENT;
-
-	hvalue = SIDTAB_HASH(sid);
-	last = NULL;
-	cur = s->htable[hvalue];
-	while (cur != NULL && sid > cur->sid) {
-		last = cur;
-		cur = cur->next;
-	}
-
-	if (cur == NULL || sid != cur->sid)
-		return -ENOENT;
-
-	if (last == NULL)
-		s->htable[hvalue] = cur->next;
-	else
-		last->next = cur->next;
-
-	context_destroy(&cur->context);
-
-	free(cur);
-	s->nel--;
 	return 0;
 }
 

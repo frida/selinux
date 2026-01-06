@@ -20,7 +20,7 @@ DISABLED = -1
 PERMISSIVE = 0
 ENFORCING = 1
 
-def restorecon(path, recursive=False, verbose=False, force=False):
+def restorecon(path, recursive=False, verbose=False, force=False, nthreads=1):
     """ Restore SELinux context on a given path
 
     Arguments:
@@ -32,6 +32,8 @@ def restorecon(path, recursive=False, verbose=False, force=False):
     force -- Force reset of context to match file_context for customizable files,
     and the default file context, changing the user, role, range portion  as well
     as the type (default False)
+    nthreads -- The number of threads to use during relabeling, or 0 to use as many
+    threads as there are online CPU cores (default 1)
     """
 
     restorecon_flags = SELINUX_RESTORECON_IGNORE_DIGEST | SELINUX_RESTORECON_REALPATH
@@ -41,7 +43,7 @@ def restorecon(path, recursive=False, verbose=False, force=False):
         restorecon_flags |= SELINUX_RESTORECON_VERBOSE
     if force:
         restorecon_flags |= SELINUX_RESTORECON_SET_SPECFILE_CTX
-    selinux_restorecon(os.path.expanduser(path), restorecon_flags)
+    selinux_restorecon_parallel(os.path.expanduser(path), restorecon_flags, nthreads)
 
 def chcon(path, context, recursive=False):
     """ Set the SELinux context on a given path """
@@ -69,7 +71,7 @@ def install(src, dest):
 	for (i = 0; i < *$2; i++) {
 		PyList_SetItem(list, i, PyString_FromString((*$1)[i]));
 	}
-	$result = SWIG_Python_AppendOutput($result, list);
+	$result = SWIG_AppendOutput($result, list);
 }
 
 /* return a sid along with the result */
@@ -106,7 +108,7 @@ def install(src, dest):
 		plist = PyList_New(0);
 	}
 
-	$result = SWIG_Python_AppendOutput($result, plist);
+	$result = SWIG_AppendOutput($result, plist);
 }
 
 /* Makes functions in get_context_list.h return a Python list of contexts */

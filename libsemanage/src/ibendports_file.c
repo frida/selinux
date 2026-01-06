@@ -20,9 +20,10 @@ typedef struct dbase_file dbase_t;
 #include "debug.h"
 
 static int ibendport_print(semanage_handle_t *handle,
-			   semanage_ibendport_t *ibendport,
+			   const semanage_ibendport_t *ibendport,
 			   FILE *str)
 {
+	const semanage_context_t *con;
 	char *con_str = NULL;
 	char *ibdev_name_str = NULL;
 	int port = semanage_ibendport_get_port(ibendport);
@@ -30,7 +31,7 @@ static int ibendport_print(semanage_handle_t *handle,
 	if (semanage_ibendport_get_ibdev_name(handle, ibendport, &ibdev_name_str) != 0)
 		goto err;
 
-	semanage_context_t *con = semanage_ibendport_get_con(ibendport);
+	con = semanage_ibendport_get_con(ibendport);
 
 	if (fprintf(str, "ibendportcon %s ", ibdev_name_str) < 0)
 		goto err;
@@ -75,7 +76,7 @@ static int ibendport_parse(semanage_handle_t *handle,
 		goto err;
 
 	/* IB Device Name */
-	if (parse_fetch_string(handle, info, &str, ' ') < 0)
+	if (parse_fetch_string(handle, info, &str, ' ', 0) < 0)
 		goto err;
 	if (semanage_ibendport_set_ibdev_name(handle, ibendport, str) < 0)
 		goto err;
@@ -92,7 +93,7 @@ static int ibendport_parse(semanage_handle_t *handle,
 	/* context */
 	if (parse_assert_space(handle, info) < 0)
 		goto err;
-	if (parse_fetch_string(handle, info, &str, ' ') < 0)
+	if (parse_fetch_string(handle, info, &str, ' ', 0) < 0)
 		goto err;
 	if (semanage_context_from_string(handle, str, &con) < 0) {
 		ERR(handle, "invalid security context \"%s\" (%s: %u)\n%s",
@@ -129,7 +130,7 @@ err:
 }
 
 /* IBENDPORT RECORD: FILE extension: method table */
-record_file_table_t SEMANAGE_IBENDPORT_FILE_RTABLE = {
+static const record_file_table_t SEMANAGE_IBENDPORT_FILE_RTABLE = {
 	.parse = ibendport_parse,
 	.print = ibendport_print,
 };

@@ -44,8 +44,36 @@
 
 #define ARRAY_SIZE(x) (sizeof(x)/sizeof((x)[0]))
 
-#define is_saturated(x) (x == (typeof(x))-1)
-#define zero_or_saturated(x) ((x == 0) || is_saturated(x))
+static inline int exceeds_available_bytes(const struct policy_file *fp, size_t x, size_t req_elem_size)
+{
+	size_t req_size;
+
+	/* Remaining input size is only available for mmap'ed memory */
+	if (fp->type != PF_USE_MEMORY)
+		return 0;
+
+	if (__builtin_mul_overflow(x, req_elem_size, &req_size))
+		return 1;
+
+	return req_size > fp->len;
+}
+
+#define is_saturated(x) ((x) == (typeof(x))-1)
+
+#define zero_or_saturated(x) (((x) == 0) || is_saturated(x))
+
+#define spaceship_cmp(a, b) (((a) > (b)) - ((a) < (b)))
+
+/* Use to ignore intentional unsigned under- and overflows while running under UBSAN. */
+#if defined(__clang__) && defined(__clang_major__) && (__clang_major__ >= 4)
+#if (__clang_major__ >= 12)
+#define ignore_unsigned_overflow_        __attribute__((no_sanitize("unsigned-integer-overflow", "unsigned-shift-base")))
+#else
+#define ignore_unsigned_overflow_        __attribute__((no_sanitize("unsigned-integer-overflow")))
+#endif
+#else
+#define ignore_unsigned_overflow_
+#endif
 
 /* Policy compatibility information. */
 struct policydb_compat_info {
@@ -56,12 +84,23 @@ struct policydb_compat_info {
 	unsigned int target_platform;
 };
 
-extern struct policydb_compat_info *policydb_lookup_compat(unsigned int version,
-							   unsigned int type,
-						unsigned int target_platform);
+extern const struct policydb_compat_info *policydb_lookup_compat(unsigned int version,
+								 unsigned int type,
+								 unsigned int target_platform);
 
 /* Reading from a policy "file". */
 extern int next_entry(void *buf, struct policy_file *fp, size_t bytes);
 extern size_t put_entry(const void *ptr, size_t size, size_t n,
 		        struct policy_file *fp);
 extern int str_read(char **strp, struct policy_file *fp, size_t len);
+
+#ifndef HAVE_REALLOCARRAY
+static inline void* reallocarray(void *ptr, size_t nmemb, size_t size) {
+	if (size && nmemb > (size_t)-1 / size) {
+		errno = ENOMEM;
+		return NULL;
+	}
+
+	return realloc(ptr, nmemb * size);
+}
+#endif

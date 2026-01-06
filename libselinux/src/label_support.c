@@ -4,12 +4,12 @@
  * Author : Richard Haines <richard_c_haines@btinternet.com>
  */
 
+#include <stdint.h>
 #include <stdlib.h>
 #include <stdarg.h>
 #include <ctype.h>
 #include <string.h>
 #include <stdio.h>
-#include <errno.h>
 #include <errno.h>
 #include "label_internal.h"
 
@@ -22,19 +22,20 @@
  *            errno will be set.
  *
  */
-static inline int read_spec_entry(char **entry, char **ptr, int *len, const char **errbuf)
+static inline int read_spec_entry(char **entry, const char **ptr, size_t *len, const char **errbuf)
 {
-	*entry = NULL;
-	char *tmp_buf = NULL;
+	const char *tmp_buf;
 
-	while (isspace(**ptr) && **ptr != '\0')
+	*entry = NULL;
+
+	while (isspace((unsigned char)**ptr) && **ptr != '\0')
 		(*ptr)++;
 
 	tmp_buf = *ptr;
 	*len = 0;
 
-	while (!isspace(**ptr) && **ptr != '\0') {
-		if (!isascii(**ptr)) {
+	while (!isspace((unsigned char)**ptr) && **ptr != '\0') {
+		if (!isascii((unsigned char)**ptr)) {
 			errno = EINVAL;
 			*errbuf = "Non-ASCII characters found";
 			return -1;
@@ -44,6 +45,12 @@ static inline int read_spec_entry(char **entry, char **ptr, int *len, const char
 	}
 
 	if (*len) {
+		if (*len >= UINT16_MAX) {
+			errno = EINVAL;
+			*errbuf = "Spec entry too long";
+			return -1;
+		}
+
 		*entry = strndup(tmp_buf, *len);
 		if (!*entry)
 			return -1;
@@ -63,25 +70,26 @@ static inline int read_spec_entry(char **entry, char **ptr, int *len, const char
  * This function calls read_spec_entry() to do the actual string processing.
  * As such, can return anything from that function as well.
  */
-int  read_spec_entries(char *line_buf, const char **errbuf, int num_args, ...)
+int  read_spec_entries(char *line_buf, size_t nread, const char **errbuf, int num_args, ...)
 {
-	char **spec_entry, *buf_p;
-	int len, rc, items, entry_len = 0;
+	char **spec_entry;
+	const char *buf_p;
+	size_t entry_len = 0;
+	int rc, items;
 	va_list ap;
 
 	*errbuf = NULL;
 
-	len = strlen(line_buf);
-	if (line_buf[len - 1] == '\n')
-		line_buf[len - 1] = '\0';
+	if (line_buf[nread - 1] == '\n')
+		line_buf[nread - 1] = '\0';
 	else
 		/* Handle case if line not \n terminated by bumping
 		 * the len for the check below (as the line is NUL
 		 * terminated by getline(3)) */
-		len++;
+		nread++;
 
 	buf_p = line_buf;
-	while (isspace(*buf_p))
+	while (isspace((unsigned char)*buf_p))
 		buf_p++;
 
 	/* Skip comment lines and empty lines. */
@@ -95,7 +103,7 @@ int  read_spec_entries(char *line_buf, const char **errbuf, int num_args, ...)
 	while (items < num_args) {
 		spec_entry = va_arg(ap, char **);
 
-		if (len - 1 == buf_p - line_buf) {
+		if (buf_p[0] == '\0' || nread - 1 == (size_t)(buf_p - line_buf)) {
 			va_end(ap);
 			return items;
 		}
@@ -116,17 +124,28 @@ int  read_spec_entries(char *line_buf, const char **errbuf, int num_args, ...)
 void  digest_gen_hash(struct selabel_digest *digest)
 {
 	Sha1Context context;
+	size_t remaining_size;
+	const unsigned char *ptr;
 
 	/* If SELABEL_OPT_DIGEST not set then just return */
 	if (!digest)
 		return;
 
 	Sha1Initialise(&context);
-	Sha1Update(&context, digest->hashbuf, digest->hashbuf_size);
+
+	/* Process in blocks of UINT32_MAX bytes */
+	remaining_size = digest->hashbuf_size;
+	ptr = digest->hashbuf;
+	while (remaining_size > UINT32_MAX) {
+		Sha1Update(&context, ptr, UINT32_MAX);
+		remaining_size -= UINT32_MAX;
+		ptr += UINT32_MAX;
+	}
+	Sha1Update(&context, ptr, remaining_size);
+
 	Sha1Finalise(&context, (SHA1_HASH *)digest->digest);
 	free(digest->hashbuf);
 	digest->hashbuf = NULL;
-	return;
 }
 
 /**
@@ -142,7 +161,7 @@ void  digest_gen_hash(struct selabel_digest *digest)
  * Return %0 on success, -%1 with @errno set on failure.
  */
 int  digest_add_specfile(struct selabel_digest *digest, FILE *fp,
-				    char *from_addr, size_t buf_len,
+				    const char *from_addr, size_t buf_len,
 				    const char *path)
 {
 	unsigned char *tmp_buf;
@@ -164,12 +183,13 @@ int  digest_add_specfile(struct selabel_digest *digest, FILE *fp,
 	digest->hashbuf = tmp_buf;
 
 	if (fp) {
-		rewind(fp);
+		if (fseek(fp, 0L, SEEK_SET) == -1)
+			return -1;
+
 		if (fread(digest->hashbuf + (digest->hashbuf_size - buf_len),
 					    1, buf_len, fp) != buf_len)
 			return -1;
 
-		rewind(fp);
 	} else if (from_addr) {
 		tmp_buf = memcpy(digest->hashbuf +
 				    (digest->hashbuf_size - buf_len),

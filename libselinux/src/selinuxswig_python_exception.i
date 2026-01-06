@@ -79,6 +79,22 @@
   }
 }
 
+%exception getpidprevcon {
+  $action
+  if (result < 0) {
+     PyErr_SetFromErrno(PyExc_OSError);
+     SWIG_fail;
+  }
+}
+
+%exception getpidprevcon_raw {
+  $action
+  if (result < 0) {
+     PyErr_SetFromErrno(PyExc_OSError);
+     SWIG_fail;
+  }
+}
+
 %exception getexeccon {
   $action
   if (result < 0) {
@@ -1176,6 +1192,14 @@
 }
 
 %exception selinux_restorecon {
+  $action
+  if (result < 0) {
+     PyErr_SetFromErrno(PyExc_OSError);
+     SWIG_fail;
+  }
+}
+
+%exception selinux_restorecon_parallel {
   $action
   if (result < 0) {
      PyErr_SetFromErrno(PyExc_OSError);

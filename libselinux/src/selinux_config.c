@@ -88,43 +88,46 @@ static const uint16_t file_path_suffixes_idx[NEL] = {
 
 int selinux_getenforcemode(int *enforce)
 {
-	int ret = -1;
 	FILE *cfg = fopen(SELINUXCONFIG, "re");
-	if (cfg) {
-		char *buf;
-		int len = sizeof(SELINUXTAG) - 1;
-		buf = malloc(selinux_page_size);
-		if (!buf) {
-			fclose(cfg);
-			return -1;
-		}
-		while (fgets_unlocked(buf, selinux_page_size, cfg)) {
-			if (strncmp(buf, SELINUXTAG, len))
-				continue;
-			if (!strncasecmp
-			    (buf + len, "enforcing", sizeof("enforcing") - 1)) {
-				*enforce = 1;
-				ret = 0;
-				break;
-			} else
-			    if (!strncasecmp
-				(buf + len, "permissive",
-				 sizeof("permissive") - 1)) {
-				*enforce = 0;
-				ret = 0;
-				break;
-			} else
-			    if (!strncasecmp
-				(buf + len, "disabled",
-				 sizeof("disabled") - 1)) {
-				*enforce = -1;
-				ret = 0;
-				break;
-			}
-		}
+	if (!cfg)
+		return -1;
+
+	char *buf = malloc(selinux_page_size);
+	if (!buf) {
 		fclose(cfg);
-		free(buf);
+		return -1;
 	}
+
+	int ret = -1;
+	const int len = sizeof(SELINUXTAG) - 1;
+	while (fgets_unlocked(buf, selinux_page_size, cfg)) {
+		if (strncmp(buf, SELINUXTAG, len))
+			continue;
+
+		char *tag = buf + len;
+		while (isspace((unsigned char)*tag))
+			tag++;
+
+		if (!strncasecmp(tag, "enforcing", sizeof("enforcing") - 1)) {
+			*enforce = 1;
+			ret = 0;
+			break;
+		} else if (!strncasecmp(tag, "permissive",
+					sizeof("permissive") - 1)) {
+			*enforce = 0;
+			ret = 0;
+			break;
+		} else if (!strncasecmp(tag, "disabled",
+					sizeof("disabled") - 1)) {
+			*enforce = -1;
+			ret = 0;
+			break;
+		}
+	}
+
+	fclose(cfg);
+	free(buf);
+
 	return ret;
 }
 
@@ -149,7 +152,6 @@ static int setpolicytype(const char *type)
 }
 
 static char *selinux_policyroot = NULL;
-static const char *selinux_rootpath = SELINUXDIR;
 
 static void init_selinux_config(void)
 {
@@ -169,24 +171,32 @@ static void init_selinux_config(void)
 			if (line_buf[len - 1] == '\n')
 				line_buf[len - 1] = 0;
 			buf_p = line_buf;
-			while (isspace(*buf_p))
+			while (isspace((unsigned char)*buf_p))
 				buf_p++;
 			if (*buf_p == '#' || *buf_p == 0)
 				continue;
 
 			if (!strncasecmp(buf_p, SELINUXTYPETAG,
 					 sizeof(SELINUXTYPETAG) - 1)) {
-				type = strdup(buf_p + sizeof(SELINUXTYPETAG) - 1);
-				if (!type)
+				buf_p += sizeof(SELINUXTYPETAG) - 1;
+				while (isspace((unsigned char)*buf_p))
+					buf_p++;
+				type = strdup(buf_p);
+				if (!type) {
+					free(line_buf);
+					fclose(fp);
 					return;
+				}
 				end = type + strlen(type) - 1;
 				while ((end > type) &&
-				       (isspace(*end) || iscntrl(*end))) {
+				       (isspace((unsigned char)*end) || iscntrl((unsigned char)*end))) {
 					*end = 0;
 					end--;
 				}
 				if (setpolicytype(type) != 0) {
 					free(type);
+					free(line_buf);
+					fclose(fp);
 					return;
 				}
 				free(type);
@@ -194,12 +204,14 @@ static void init_selinux_config(void)
 			} else if (!strncmp(buf_p, REQUIRESEUSERS,
 					    sizeof(REQUIRESEUSERS) - 1)) {
 				value = buf_p + sizeof(REQUIRESEUSERS) - 1;
+				while (isspace((unsigned char)*value))
+					value++;
 				intptr = &require_seusers;
 			} else {
 				continue;
 			}
 
-			if (isdigit(*value))
+			if (isdigit((unsigned char)*value))
 				*intptr = atoi(value);
 			else if (strncasecmp(value, "true", sizeof("true") - 1))
 				*intptr = 1;
@@ -298,7 +310,7 @@ int selinux_set_policy_root(const char *path)
 
 const char *selinux_path(void)
 {
-	return selinux_rootpath;
+	return SELINUXDIR;
 }
 
 

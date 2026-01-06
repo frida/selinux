@@ -43,7 +43,7 @@ static const char *type_str(int type)
 }
 
 static int fcontext_print(semanage_handle_t * handle,
-			  semanage_fcontext_t * fcontext, FILE * str)
+			  const semanage_fcontext_t * fcontext, FILE * str)
 {
 
 	char *con_str = NULL;
@@ -90,7 +90,7 @@ static int fcontext_parse(semanage_handle_t * handle,
 		goto last;
 
 	/* Regexp */
-	if (parse_fetch_string(handle, info, &str, ' ') < 0)
+	if (parse_fetch_string(handle, info, &str, ' ', 0) < 0)
 		goto err;
 	if (semanage_fcontext_set_expr(handle, fcontext, str) < 0)
 		goto err;
@@ -100,7 +100,7 @@ static int fcontext_parse(semanage_handle_t * handle,
 	/* Type */
 	if (parse_assert_space(handle, info) < 0)
 		goto err;
-	if (parse_fetch_string(handle, info, &str, ' ') < 0)
+	if (parse_fetch_string(handle, info, &str, ' ', 0) < 0)
 		goto err;
 	if (!strcasecmp(str, "-s"))
 		semanage_fcontext_set_type(fcontext, SEMANAGE_FCONTEXT_SOCK);
@@ -124,7 +124,7 @@ static int fcontext_parse(semanage_handle_t * handle,
 	/* Context */
 	if (parse_assert_space(handle, info) < 0)
 		goto err;
-	if (parse_fetch_string(handle, info, &str, ' ') < 0)
+	if (parse_fetch_string(handle, info, &str, ' ', 0) < 0)
 		goto err;
 
       process_context:
@@ -158,7 +158,7 @@ static int fcontext_parse(semanage_handle_t * handle,
 }
 
 /* FCONTEXT RECORD: FILE extension: method table */
-record_file_table_t SEMANAGE_FCONTEXT_FILE_RTABLE = {
+static const record_file_table_t SEMANAGE_FCONTEXT_FILE_RTABLE = {
 	.parse = fcontext_parse,
 	.print = fcontext_print,
 };

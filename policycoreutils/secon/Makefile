@@ -1,5 +1,5 @@
 # secon tool - command-line context
-LINGUAS ?= ru
+LINGUAS ?=
 PREFIX ?= /usr
 BINDIR ?= $(PREFIX)/bin
 MANDIR ?= $(PREFIX)/share/man
@@ -7,8 +7,9 @@ MANDIR ?= $(PREFIX)/share/man
 WARNS=-Werror -W -Wall -Wundef -Wshadow -Wpointer-arith -Wbad-function-cast -Wcast-align -Wwrite-strings -Waggregate-return -Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations -Wnested-externs -Wno-format-zero-length -Wformat-nonliteral -Wformat-security -Wfloat-equal
 VERSION = $(shell cat ../VERSION)
 CFLAGS ?= $(WARNS) -O1
-override CFLAGS += -DVERSION=\"$(VERSION)\"
-override LDLIBS += -lselinux
+override CFLAGS += -I../../libselinux/include -DVERSION=\"$(VERSION)\"
+override LDFLAGS+= -L../../libselinux/src
+override LDLIBS += $(LIBSELINUX_LDLIBS)
 
 all: secon
 
@@ -33,9 +34,6 @@ relabel:
 
 clean:
 	rm -f *.o core* secon *~ *.bak
-
-indent:
-	../../scripts/Lindent $(wildcard *.[ch])
 
 bare: clean
 

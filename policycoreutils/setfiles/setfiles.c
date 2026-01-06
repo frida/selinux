@@ -1,4 +1,5 @@
 #include "restore.h"
+#include <stdlib.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <stdio_ext.h>
@@ -19,17 +20,8 @@ static int warn_no_match;
 static int null_terminated;
 static int request_digest;
 static struct restore_opts r_opts;
-static int nerr;
 
 #define STAT_BLOCK_SIZE 1
-
-/* setfiles will abort its operation after reaching the
- * following number of errors (e.g. invalid contexts),
- * unless it is used in "debug" mode (-d option).
- */
-#ifndef ABORT_ON_ERRORS
-#define ABORT_ON_ERRORS	10
-#endif
 
 #define SETFILES "setfiles"
 #define RESTORECON "restorecon"
@@ -43,29 +35,20 @@ static __attribute__((__noreturn__)) void usage(const char *const name)
 {
 	if (iamrestorecon) {
 		fprintf(stderr,
-			"usage:  %s [-iIDFmnprRv0x] [-e excludedir] pathname...\n"
-			"usage:  %s [-iIDFmnprRv0x] [-e excludedir] -f filename\n",
+			"usage:  %s [-iIDFUmnprRv0xT] [-e excludedir] pathname...\n"
+			"usage:  %s [-iIDFUmnprRv0xT] [-e excludedir] -f filename\n",
 			name, name);
 	} else {
 		fprintf(stderr,
-			"usage:  %s [-diIDlmnpqvEFW] [-e excludedir] [-r alt_root_path] [-c policyfile] spec_file pathname...\n"
-			"usage:  %s [-diIDlmnpqvEFW] [-e excludedir] [-r alt_root_path] [-c policyfile] spec_file -f filename\n"
-			"usage:  %s -s [-diIDlmnpqvFW] spec_file\n",
+			"usage:  %s [-diIDlmnpqvACEFUWT] [-e excludedir] [-r alt_root_path] [-c policyfile] spec_file pathname...\n"
+			"usage:  %s [-diIDlmnpqvACEFUWT] [-e excludedir] [-r alt_root_path] [-c policyfile] spec_file -f filename\n"
+			"usage:  %s -s [-diIDlmnpqvAFUWT] spec_file\n",
 			name, name, name);
 	}
 	exit(-1);
 }
 
-void inc_err(void)
-{
-	nerr++;
-	if (nerr > ABORT_ON_ERRORS - 1 && !r_opts.debug) {
-		fprintf(stderr, "Exiting after %d errors.\n", ABORT_ON_ERRORS);
-		exit(-1);
-	}
-}
-
-void set_rootpath(const char *arg)
+static void set_rootpath(const char *arg)
 {
 	if (strlen(arg) == 1 && strncmp(arg, "/", 1) == 0) {
 		fprintf(stderr, "%s:  invalid alt_rootpath: %s\n",
@@ -82,7 +65,7 @@ void set_rootpath(const char *arg)
 	}
 }
 
-int canoncon(char **contextp)
+static int canoncon(char **contextp)
 {
 	char *context = *contextp, *tmpcon;
 	int rc = 0;
@@ -97,30 +80,26 @@ int canoncon(char **contextp)
 		*contextp = tmpcon;
 	} else if (errno != ENOENT) {
 		rc = -1;
-		inc_err();
 	}
 
 	return rc;
 }
 
 #ifndef USE_AUDIT
-static void maybe_audit_mass_relabel(int mass_relabel __attribute__((unused)),
-				int mass_relabel_errs __attribute__((unused)))
+static void audit_mass_relabel(int mass_relabel_errs __attribute__((unused)))
 {
 #else
-static void maybe_audit_mass_relabel(int mass_relabel, int mass_relabel_errs)
+static void audit_mass_relabel(int mass_relabel_errs)
 {
 	int audit_fd = -1;
 	int rc = 0;
 
-	if (!mass_relabel)		/* only audit a forced full relabel */
-		return;
-
 	audit_fd = audit_open();
 
 	if (audit_fd < 0) {
-		fprintf(stderr, "Error connecting to audit system.\n");
-		exit(-1);
+		fprintf(stderr, "Error connecting to audit system: %s.\n",
+			strerror(errno));
+		return;
 	}
 
 	rc = audit_log_user_message(audit_fd, AUDIT_FS_RELABEL,
@@ -163,14 +142,15 @@ int main(int argc, char **argv)
 	int opt, i = 0;
 	const char *input_filename = NULL;
 	int use_input_file = 0;
-	char *buf = NULL;
-	size_t buf_len;
+	char *buf = NULL, *endptr;
+	size_t buf_len, nthreads = 1;
 	const char *base;
 	int errors = 0;
-	const char *ropts = "e:f:hiIDlmno:pqrsvFRW0x";
-	const char *sopts = "c:de:f:hiIDlmno:pqr:svEFR:W0";
+	const char *ropts = "e:f:hiIDlmno:pqrsvFURW0xT:";
+	const char *sopts = "c:de:f:hiIDlmno:pqr:svACEFUR:W0T:";
 	const char *opts;
 	union selinux_callback cb;
+	long unsigned skipped_errors;
 
 	/* Initialize variables */
 	memset(&r_opts, 0, sizeof(r_opts));
@@ -179,8 +159,12 @@ int main(int argc, char **argv)
 	warn_no_match = 0;
 	request_digest = 0;
 	policyfile = NULL;
-	nerr = 0;
+	skipped_errors = 0;
 
+	if (!argv[0]) {
+		fprintf(stderr, "Called without required program name!\n");
+		exit(-1);
+	}
 	r_opts.progname = strdup(argv[0]);
 	if (!r_opts.progname) {
 		fprintf(stderr, "%s:  Out of memory!\n", argv[0]);
@@ -193,7 +177,6 @@ int main(int argc, char **argv)
 		 * setfiles:
 		 * Recursive descent,
 		 * Does not expand paths via realpath,
-		 * Aborts on errors during the file tree walk,
 		 * Try to track inode associations for conflict detection,
 		 * Does not follow mounts (sets SELINUX_RESTORECON_XDEV),
 		 * Validates all file contexts at init time.
@@ -201,7 +184,6 @@ int main(int argc, char **argv)
 		iamrestorecon = 0;
 		r_opts.recurse = SELINUX_RESTORECON_RECURSE;
 		r_opts.userealpath = 0; /* SELINUX_RESTORECON_REALPATH */
-		r_opts.abort_on_error = SELINUX_RESTORECON_ABORT_ON_ERROR;
 		r_opts.add_assoc = SELINUX_RESTORECON_ADD_ASSOC;
 		/* FTS_PHYSICAL and FTS_NOCHDIR are always set by selinux_restorecon(3) */
 		r_opts.xdev = SELINUX_RESTORECON_XDEV;
@@ -213,7 +195,6 @@ int main(int argc, char **argv)
 		 * restorecon:
 		 * No recursive descent unless -r/-R,
 		 * Expands paths via realpath,
-		 * Do not abort on errors during the file tree walk,
 		 * Do not try to track inode associations for conflict detection,
 		 * Follows mounts,
 		 * Does lazy validation of contexts upon use.
@@ -225,7 +206,6 @@ int main(int argc, char **argv)
 		iamrestorecon = 1;
 		r_opts.recurse = 0;
 		r_opts.userealpath = SELINUX_RESTORECON_REALPATH;
-		r_opts.abort_on_error = 0;
 		r_opts.add_assoc = 0;
 		r_opts.xdev = 0;
 		r_opts.ignore_mounts = 0;
@@ -245,9 +225,6 @@ int main(int argc, char **argv)
 		case 'c':
 			{
 				FILE *policystream;
-
-				if (iamrestorecon)
-					usage(argv[0]);
 
 				policyfile = optarg;
 
@@ -286,8 +263,6 @@ int main(int argc, char **argv)
 			input_filename = optarg;
 			break;
 		case 'd':
-			if (iamrestorecon)
-				usage(argv[0]);
 			r_opts.debug = 1;
 			r_opts.log_matches =
 					   SELINUX_RESTORECON_LOG_MATCHES;
@@ -312,6 +287,9 @@ int main(int argc, char **argv)
 			r_opts.syslog_changes =
 					   SELINUX_RESTORECON_SYSLOG_CHANGES;
 			break;
+		case 'C':
+			r_opts.count_errors = SELINUX_RESTORECON_COUNT_ERRORS;
+			break;
 		case 'E':
 			r_opts.conflict_error =
 					   SELINUX_RESTORECON_CONFLICT_ERROR;
@@ -319,6 +297,10 @@ int main(int argc, char **argv)
 		case 'F':
 			r_opts.set_specctx =
 					   SELINUX_RESTORECON_SET_SPECFILE_CTX;
+			break;
+		case 'U':
+			r_opts.set_user_role =
+					   SELINUX_RESTORECON_SET_USER_ROLE;
 			break;
 		case 'm':
 			r_opts.ignore_mounts =
@@ -385,13 +367,17 @@ int main(int argc, char **argv)
 		case '0':
 			null_terminated = 1;
 			break;
-                case 'x':
-                        if (iamrestorecon) {
-				r_opts.xdev = SELINUX_RESTORECON_XDEV;
-                        } else {
+		case 'x':
+			r_opts.xdev = SELINUX_RESTORECON_XDEV;
+			break;
+		case 'T':
+			nthreads = strtoull(optarg, &endptr, 10);
+			if (*optarg == '\0' || *endptr != '\0')
 				usage(argv[0]);
-                        }
-                        break;
+			break;
+		case 'A':
+			r_opts.add_assoc = 0;
+			break;
 		case 'h':
 		case '?':
 			usage(argv[0]);
@@ -439,16 +425,13 @@ int main(int argc, char **argv)
 
 		altpath = argv[optind];
 		optind++;
-	} else if (argc == 1)
+	} else if (argc < 2)
 		usage(argv[0]);
 
 	/* Set selabel_open options. */
 	r_opts.selabel_opt_validate = (ctx_validate ? (char *)1 : NULL);
 	r_opts.selabel_opt_digest = (request_digest ? (char *)1 : NULL);
 	r_opts.selabel_opt_path = altpath;
-
-	if (nerr)
-		exit(-1);
 
 	restore_init(&r_opts);
 
@@ -473,16 +456,19 @@ int main(int argc, char **argv)
 			buf[len - 1] = 0;
 			if (!strcmp(buf, "/"))
 				r_opts.mass_relabel = SELINUX_RESTORECON_MASS_RELABEL;
-			errors |= process_glob(buf, &r_opts) < 0;
+			errors |= process_glob(buf, &r_opts, nthreads,
+					       &skipped_errors) < 0;
 		}
 		if (strcmp(input_filename, "-") != 0)
 			fclose(f);
 	} else {
 		for (i = optind; i < argc; i++)
-			errors |= process_glob(argv[i], &r_opts) < 0;
+			errors |= process_glob(argv[i], &r_opts, nthreads,
+					       &skipped_errors) < 0;
 	}
 
-	maybe_audit_mass_relabel(r_opts.mass_relabel, errors);
+	if (r_opts.mass_relabel && !r_opts.nochange)
+		audit_mass_relabel(errors);
 
 	if (warn_no_match)
 		selabel_stats(r_opts.hnd);
@@ -493,5 +479,5 @@ int main(int argc, char **argv)
 	if (r_opts.progress)
 		fprintf(stdout, "\n");
 
-	exit(errors ? -1 : 0);
+	exit(errors ? -1 : skipped_errors ? 1 : 0);
 }

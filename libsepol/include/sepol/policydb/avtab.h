@@ -1,5 +1,5 @@
 
-/* Author : Stephen Smalley, <sds@tycho.nsa.gov> */
+/* Author : Stephen Smalley, <stephen.smalley.work@gmail.com> */
 
 /*
  * Updated: Yuichi Nakamura <ynakam@hitachisoft.jp>
@@ -74,6 +74,7 @@ typedef struct avtab_extended_perms {
 
 #define AVTAB_XPERMS_IOCTLFUNCTION	0x01
 #define AVTAB_XPERMS_IOCTLDRIVER	0x02
+#define AVTAB_XPERMS_NLMSG	0x03
 	/* extension of the avtab_key specified */
 	uint8_t specified;
 	uint8_t driver;
@@ -112,7 +113,7 @@ extern avtab_datum_t *avtab_search(avtab_t * h, avtab_key_t * k);
 
 extern void avtab_destroy(avtab_t * h);
 
-extern int avtab_map(avtab_t * h,
+extern int avtab_map(const avtab_t * h,
 		     int (*apply) (avtab_key_t * k,
 				   avtab_datum_t * d, void *args), void *args);
 

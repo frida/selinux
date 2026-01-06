@@ -1,5 +1,5 @@
-.TH SEMODULE "8" "Nov 2005" "Security Enhanced Linux" NSA
-.SH NAME 
+.TH SEMODULE "8" "Nov 2005" "Security Enhanced Linux"
+.SH NAME
 semodule \- Manage SELinux policy modules.
 
 .SH SYNOPSIS
@@ -8,7 +8,7 @@ semodule \- Manage SELinux policy modules.
 .SH DESCRIPTION
 .PP
 semodule is the tool used to manage SELinux policy modules,
-including installing, upgrading, listing and removing modules.  
+including installing, upgrading, listing and removing modules.
 semodule may also be used to force a rebuild of policy from the
 module store and/or to force a reload of policy without performing
 any other transaction.  semodule acts on module packages created
@@ -23,6 +23,13 @@ force a reload of policy
 .B \-B, \-\-build
 force a rebuild of policy (also reloads unless \-n is used)
 .TP
+.B \-\-refresh
+Like \-\-build, but reuses existing linked policy if no changes to module
+files are detected (by comparing with checksum from the last transaction).
+One can use this instead of \-B to ensure that any changes to the module
+store done by an external tool (e.g. a package manager) are applied, while
+automatically skipping the module re-linking if there are no module changes.
+.TP
 .B \-D, \-\-disable_dontaudit
 Temporarily remove dontaudits from policy.  Reverts whenever policy is rebuilt
 .TP
@@ -32,7 +39,7 @@ install/replace a module package
 .B  \-u,\-\-upgrade=MODULE_PKG
 deprecated, alias for --install
 .TP
-.B  \-b,\-\-base=MODULE_PKG   
+.B  \-b,\-\-base=MODULE_PKG
 deprecated, alias for --install
 .TP
 .B  \-r,\-\-remove=MODULE_NAME
@@ -70,7 +77,7 @@ name of the store to operate on
 .B  \-n,\-\-noreload,\-N
 do not reload policy after commit
 .TP
-.B  \-h,\-\-help        
+.B  \-h,\-\-help
 prints help message and quit
 .TP
 .B \-P,\-\-preserve_tunables
@@ -79,13 +86,16 @@ Preserve tunables in policy
 .B \-C,\-\-ignore-module-cache
 Recompile CIL modules built from HLL files
 .TP
+.B \-g,\-\-config=PATH
+use an alternate path for the semanage config
+.TP
 .B \-p,\-\-path
 Use an alternate path for the policy root
 .TP
 .B \-S,\-\-store-path
 Use an alternate path for the policy store root
 .TP
-.B  \-v,\-\-verbose     
+.B  \-v,\-\-verbose
 be verbose
 .TP
 .B  \-c,\-\-cil
@@ -95,6 +105,9 @@ only modules listed in \-\-extract after this option.
 .B  \-H,\-\-hll
 Extract module as an HLL file. This only affects the \-\-extract option and
 only modules listed in \-\-extract after this option.
+.TP
+.B  \-m,\-\-checksum
+Add SHA256 checksum of modules to the list output.
 
 .SH EXAMPLE
 .nf
@@ -121,8 +134,6 @@ $ semodule \-B
 $ semodule \-d alsa
 # Install a module at a specific priority.
 $ semodule \-X 100 \-i alsa.pp
-# List all modules.
-$ semodule \-\-list=full
 # Set an alternate path for the policy root
 $ semodule \-B \-p "/tmp"
 # Set an alternate path for the policy store root
@@ -130,6 +141,11 @@ $ semodule \-B \-S "/tmp/var/lib/selinux"
 # Write the HLL version of puppet and the CIL version of wireshark
 # modules at priority 400 to the current working directory
 $ semodule \-X 400 \-\-hll \-E puppet \-\-cil \-E wireshark
+# Check whether a module in "localmodule.pp" file is same as installed module "localmodule"
+$ /usr/libexec/selinux/hll/pp localmodule.pp | sha256sum
+$ semodule -l -m | grep localmodule
+# Translate binary module file into CIL (useful for debugging installation errors)
+$ /usr/libexec/selinux/hll/pp alsa.pp > alsa.cil
 .fi
 
 .SH SEE ALSO

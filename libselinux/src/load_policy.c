@@ -16,6 +16,7 @@
 #include <sepol/policydb.h>
 #endif
 #include <dlfcn.h>
+#include "callbacks.h"
 #include "policy.h"
 #include <limits.h>
 
@@ -23,7 +24,7 @@
 #define MNT_DETACH 2
 #endif
 
-int security_load_policy(void *data, size_t len)
+int security_load_policy(const void *data, size_t len)
 {
 	char path[PATH_MAX];
 	int fd, ret;
@@ -80,7 +81,7 @@ int selinux_mkload_policy(int preservebools __attribute__((unused)))
 	if (libsepolh) {
 		usesepol = 1;
 		dlerror();
-#define DLERR() if ((errormsg = dlerror())) goto dlclose;
+#define DLERR() do { if ((errormsg = dlerror())) goto dlclose; } while (0)
 		vers_max = dlsym(libsepolh, "sepol_policy_kern_vers_max");
 		DLERR();
 		vers_min = dlsym(libsepolh, "sepol_policy_kern_vers_min");
@@ -136,25 +137,25 @@ int selinux_mkload_policy(int preservebools __attribute__((unused)))
 		fd = open(path, O_RDONLY | O_CLOEXEC);
 	}
 	if (fd < 0) {
-		fprintf(stderr,
-			"SELinux:  Could not open policy file <= %s.%d:  %s\n",
-			selinux_binary_policy_path(), maxvers, strerror(errno));
+		selinux_log(SELINUX_ERROR,
+		            "SELinux:  Could not open policy file <= %s.%d:  %m\n",
+		            selinux_binary_policy_path(), maxvers);
 		goto dlclose;
 	}
 
 	if (fstat(fd, &sb) < 0) {
-		fprintf(stderr,
-			"SELinux:  Could not stat policy file %s:  %s\n",
-			path, strerror(errno));
+		selinux_log(SELINUX_ERROR,
+		            "SELinux:  Could not stat policy file %s:  %m\n",
+		            path);
 		goto close;
 	}
 
 	size = sb.st_size;
 	data = map = mmap(NULL, size, PROT_READ, MAP_PRIVATE, fd, 0);
 	if (map == MAP_FAILED) {
-		fprintf(stderr,
-			"SELinux:  Could not map policy file %s:  %s\n",
-			path, strerror(errno));
+		selinux_log(SELINUX_ERROR,
+		            "SELinux:  Could not map policy file %s:  %m\n",
+		            path);
 		goto close;
 	}
 
@@ -175,9 +176,9 @@ int selinux_mkload_policy(int preservebools __attribute__((unused)))
 		if (policydb_set_vers(policydb, kernvers) ||
 		    policydb_to_image(NULL, policydb, &data, &size)) {
 			/* Downgrade failed, keep searching. */
-			fprintf(stderr,
-				"SELinux:  Could not downgrade policy file %s, searching for an older version.\n",
-				path);
+			selinux_log(SELINUX_ERROR,
+			            "SELinux:  Could not downgrade policy file %s, searching for an older version.\n",
+			            path);
 			policy_file_free(pf);
 			policydb_free(policydb);
 			munmap(map, sb.st_size);
@@ -192,9 +193,9 @@ int selinux_mkload_policy(int preservebools __attribute__((unused)))
 	rc = security_load_policy(data, size);
 	
 	if (rc)
-		fprintf(stderr,
-			"SELinux:  Could not load policy file %s:  %s\n",
-			path, strerror(errno));
+		selinux_log(SELINUX_ERROR,
+		            "SELinux:  Could not load policy file %s:  %m\n",
+		            path);
 
       unmap:
 	if (data != map)
@@ -205,7 +206,7 @@ int selinux_mkload_policy(int preservebools __attribute__((unused)))
       dlclose:
 #ifdef SHARED
 	if (errormsg)
-		fprintf(stderr, "libselinux:  %s\n", errormsg);
+		selinux_log(SELINUX_ERROR, "libselinux:  %s\n", errormsg);
 	if (libsepolh)
 		dlclose(libsepolh);
 #endif
@@ -244,17 +245,28 @@ int selinux_init_load_policy(int *enforce)
 	rc = mount("proc", "/proc", "proc", 0, 0);
 	cfg = fopen("/proc/cmdline", "re");
 	if (cfg) {
-		char *tmp;
 		buf = malloc(selinux_page_size);
 		if (!buf) {
 			fclose(cfg);
 			return -1;
 		}
-		if (fgets(buf, selinux_page_size, cfg) &&
-		    (tmp = strstr(buf, "enforcing="))) {
-			if (tmp == buf || isspace(*(tmp - 1))) {
-				secmdline =
-				    atoi(tmp + sizeof("enforcing=") - 1);
+		if (fgets(buf, selinux_page_size, cfg)) {
+			char *search = buf;
+			char *tmp;
+			while ((tmp = strstr(search, "enforcing="))) {
+				if (tmp == buf || isspace((unsigned char)*(tmp - 1))) {
+					char *valstr = tmp + sizeof("enforcing=") - 1;
+					char *endptr;
+					errno = 0;
+					const long val = strtol(valstr, &endptr, 0);
+					if (endptr != valstr && errno == 0) {
+						secmdline = val ? 1 : 0;
+					} else {
+						secmdline = 0;
+					}
+				}
+				/* advance past the current substring, latter arguments take precedence */
+				search = tmp + sizeof("enforcing=") - 1;
 			}
 		}
 		fclose(cfg);
@@ -306,7 +318,7 @@ int selinux_init_load_policy(int *enforce)
 			*enforce = 0;
 		} else {
 			/* Only emit this error if selinux was not disabled */
-			fprintf(stderr, "Mount failed for selinuxfs on %s:  %s\n", SELINUXMNT, strerror(errno));
+			selinux_log(SELINUX_ERROR, "Mount failed for selinuxfs on %s:  %m\n", SELINUXMNT);
 		}
 
 		if (rc == 0)
@@ -326,7 +338,9 @@ int selinux_init_load_policy(int *enforce)
 
 	if (seconfig == -1) {
 		/* Runtime disable of SELinux. */
+		IGNORE_DEPRECATED_DECLARATION_BEGIN
 		rc = security_disable();
+		IGNORE_DEPRECATED_DECLARATION_END
 		if (rc == 0) {
 			/* Successfully disabled, so umount selinuxfs too. */
 			umount(selinux_mnt);
@@ -352,7 +366,7 @@ int selinux_init_load_policy(int *enforce)
 	if (orig_enforce != *enforce) {
 		rc = security_setenforce(*enforce);
 		if (rc < 0) {
-			fprintf(stderr, "SELinux:  Unable to switch to %s mode:  %s\n", (*enforce ? "enforcing" : "permissive"), strerror(errno));
+			selinux_log(SELINUX_ERROR, "SELinux:  Unable to switch to %s mode:  %m\n", (*enforce ? "enforcing" : "permissive"));
 			if (*enforce)
 				goto noload;
 		}

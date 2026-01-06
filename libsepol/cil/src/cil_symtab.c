@@ -42,7 +42,7 @@
 #include "cil_strpool.h"
 #include "cil_log.h"
 
-__attribute__((noreturn)) __attribute__((format (printf, 1, 2))) void cil_symtab_error(const char* msg, ...)
+__attribute__((noreturn)) __attribute__((format (printf, 1, 2))) static void cil_symtab_error(const char* msg, ...)
 {
 	va_list ap;
 	va_start(ap, msg);
@@ -92,10 +92,11 @@ int cil_symtab_insert(symtab_t *symtab, hashtab_key_t key, struct cil_symtab_dat
 		datum->name = key;
 		datum->fqn = key;
 		datum->symtab = symtab;
-		cil_list_append(datum->nodes, CIL_NODE, node);
-	} else if (rc == SEPOL_EEXIST) {
-		cil_list_append(datum->nodes, CIL_NODE, node);
-	} else {
+		symtab->nprim++;
+		if (node) {
+			cil_list_append(datum->nodes, CIL_NODE, node);
+		}
+	} else if (rc != SEPOL_EEXIST) {
 		cil_symtab_error("Failed to insert datum into hashtab\n");
 	}
 
@@ -111,6 +112,7 @@ void cil_symtab_remove_datum(struct cil_symtab_datum *datum)
 	}
 
 	hashtab_remove(symtab->table, datum->name, NULL, NULL);
+	symtab->nprim--;
 	datum->symtab = NULL;
 }
 
@@ -147,7 +149,7 @@ void cil_symtab_destroy(symtab_t *symtab)
 	}
 }
 
-void cil_complex_symtab_hash(struct cil_complex_symtab_key *ckey, int mask, intptr_t *hash)
+static void cil_complex_symtab_hash(struct cil_complex_symtab_key *ckey, int mask, intptr_t *hash)
 {
 	intptr_t sum = ckey->key1 + ckey->key2 + ckey->key3 + ckey->key4;
 	*hash = (intptr_t)((sum >> 2) & mask);

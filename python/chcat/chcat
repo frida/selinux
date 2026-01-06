@@ -1,4 +1,4 @@
-#!/usr/bin/python3 -Es
+#!/usr/bin/python3 -EsI
 # Copyright (C) 2005 Red Hat
 # see file 'COPYING' for use and warranty information
 #
@@ -30,17 +30,18 @@ import getopt
 import selinux
 import seobject
 
-PROGNAME = "policycoreutils"
+PROGNAME = "selinux-python"
 try:
     import gettext
     kwargs = {}
     if sys.version_info < (3,):
         kwargs['unicode'] = True
-    gettext.install(PROGNAME,
+    t = gettext.translation(PROGNAME,
                     localedir="/usr/share/locale",
-                    codeset='utf-8',
-                    **kwargs)
-except ImportError:
+                    **kwargs,
+                    fallback=True)
+    _ = t.gettext
+except:
     try:
         import builtins
         builtins.__dict__['_'] = str
@@ -124,7 +125,7 @@ def chcat_add(orig, newcat, objects, login_ind):
 
         if len(clist) > 1:
             if cat in clist[1:]:
-                print(_("%s is already in %s") % (f, orig))
+                print(_("{target} is already in {category}").format(target=f, category=orig))
                 continue
             clist.append(cat)
             cats = clist[1:]
@@ -206,7 +207,7 @@ def chcat_remove(orig, newcat, objects, login_ind):
 
         if len(clist) > 1:
             if cat not in clist[1:]:
-                print(_("%s is not in %s") % (f, orig))
+                print(_("{target} is not in {category}").format(target=f, category=orig))
                 continue
             clist.remove(cat)
             if len(clist) > 1:
@@ -216,7 +217,7 @@ def chcat_remove(orig, newcat, objects, login_ind):
             else:
                 cat = ""
         else:
-            print(_("%s is not in %s") % (f, orig))
+            print(_("{target} is not in {category}").format(target=f, category=orig))
             continue
 
         if len(cat) == 0:

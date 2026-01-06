@@ -54,7 +54,9 @@ typedef struct cond_expr {
 #define COND_NEQ	7	/* bool != bool */
 #define COND_LAST	COND_NEQ
 	uint32_t expr_type;
-	uint32_t bool;
+	/* The member `boolean` was renamed from `bool` in version 3.6 */
+#define COND_EXPR_T_RENAME_BOOL_BOOLEAN
+	uint32_t boolean;
 	struct cond_expr *next;
 } cond_expr_t;
 
@@ -90,7 +92,7 @@ typedef struct cond_node {
 	uint32_t expr_pre_comp;
 	struct cond_node *next;
 	/* a tunable conditional, calculated and used at expansion */
-#define	COND_NODE_FLAGS_TUNABLE	0x01
+#define	COND_NODE_FLAGS_TUNABLE	UINT32_C(0x01)
 	uint32_t flags;
 } cond_node_t;
 

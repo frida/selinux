@@ -1,4 +1,4 @@
-/* Author : Stephen Smalley, <sds@tycho.nsa.gov> */
+/* Author : Stephen Smalley, <stephen.smalley.work@gmail.com> */
 /*
  * Updated: Trusted Computer Solutions, Inc. <dgoeddel@trustedcs.com>
  *
@@ -27,6 +27,7 @@
  * Implementation of the multi-level security (MLS) policy.
  */
 
+#include <sepol/context.h>
 #include <sepol/policydb/policydb.h>
 #include <sepol/policydb/services.h>
 #include <sepol/policydb/context.h>
@@ -450,7 +451,7 @@ int mls_context_to_sid(const policydb_t * policydb,
  * Copies the MLS range from `src' into `dst'.
  */
 static inline int mls_copy_context(context_struct_t * dst,
-				   context_struct_t * src)
+				   const context_struct_t * src)
 {
 	int l, rc = 0;
 
@@ -470,7 +471,7 @@ static inline int mls_copy_context(context_struct_t * dst,
  * Copies the effective MLS range from `src' into `dst'.
  */
 static inline int mls_scopy_context(context_struct_t * dst,
-				    context_struct_t * src)
+				    const context_struct_t * src)
 {
 	int l, rc = 0;
 
@@ -489,7 +490,7 @@ static inline int mls_scopy_context(context_struct_t * dst,
 /*
  * Copies the MLS range `range' into `context'.
  */
-static inline int mls_range_set(context_struct_t * context, mls_range_t * range)
+static inline int mls_range_set(context_struct_t * context, const mls_range_t * range)
 {
 	int l, rc = 0;
 
@@ -600,8 +601,8 @@ int mls_convert_context(policydb_t * oldp,
 }
 
 int mls_compute_sid(policydb_t * policydb,
-		    context_struct_t * scontext,
-		    context_struct_t * tcontext,
+		    const context_struct_t * scontext,
+		    const context_struct_t * tcontext,
 		    sepol_security_class_t tclass,
 		    uint32_t specified, context_struct_t * newcontext)
 {
@@ -664,15 +665,17 @@ int mls_compute_sid(policydb_t * policydb,
 }
 
 int sepol_mls_contains(sepol_handle_t * handle,
-		       sepol_policydb_t * policydb,
+		       const sepol_policydb_t * policydb,
 		       const char *mls1, const char *mls2, int *response)
 {
 
 	context_struct_t *ctx1 = NULL, *ctx2 = NULL;
 	ctx1 = malloc(sizeof(context_struct_t));
 	ctx2 = malloc(sizeof(context_struct_t));
-	if (ctx1 == NULL || ctx2 == NULL)
+	if (ctx1 == NULL || ctx2 == NULL){
+		ERR(handle, "out of memory");
 		goto omem;
+	}
 	context_init(ctx1);
 	context_init(ctx2);
 
@@ -689,21 +692,19 @@ int sepol_mls_contains(sepol_handle_t * handle,
 	free(ctx2);
 	return STATUS_SUCCESS;
 
-      omem:
-	ERR(handle, "out of memory");
-
       err:
-	ERR(handle, "could not check if mls context %s contains %s",
-	    mls1, mls2);
 	context_destroy(ctx1);
 	context_destroy(ctx2);
+      omem:
 	free(ctx1);
 	free(ctx2);
+	ERR(handle, "could not check if mls context %s contains %s",
+	    mls1, mls2);
 	return STATUS_ERR;
 }
 
 int sepol_mls_check(sepol_handle_t * handle,
-		    sepol_policydb_t * policydb, const char *mls)
+		    const sepol_policydb_t * policydb, const char *mls)
 {
 
 	int ret;
@@ -754,9 +755,10 @@ void mls_semantic_level_destroy(mls_semantic_level_t * l)
 }
 
 int mls_semantic_level_cpy(mls_semantic_level_t * dst,
-			   mls_semantic_level_t * src)
+			   const mls_semantic_level_t * src)
 {
-	mls_semantic_cat_t *cat, *newcat, *lnewcat = NULL;
+	const mls_semantic_cat_t *cat;
+	mls_semantic_cat_t *newcat, *lnewcat = NULL;
 
 	mls_semantic_level_init(dst);
 	dst->sens = src->sens;
@@ -799,7 +801,7 @@ void mls_semantic_range_destroy(mls_semantic_range_t * r)
 }
 
 int mls_semantic_range_cpy(mls_semantic_range_t * dst,
-			   mls_semantic_range_t * src)
+			   const mls_semantic_range_t * src)
 {
 	if (mls_semantic_level_cpy(&dst->level[0], &src->level[0]) < 0)
 		return -1;

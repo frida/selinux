@@ -37,7 +37,7 @@ context_t context_new(const char *str)
 	}
 	n->current_str = n->component[0] = n->component[1] = n->component[2] =
 	    n->component[3] = 0;
-	for (i = count = 0, p = str; *p; p++) {
+	for (count = 0, p = str; *p; p++) {
 		switch (*p) {
 		case ':':
 			count++;
@@ -68,11 +68,9 @@ context_t context_new(const char *str)
 			for (p = tok; *p; p++) {	/* empty */
 			}
 		}
-		n->component[i] = (char *)malloc(p - tok + 1);
+		n->component[i] = strndup(tok, p - tok);
 		if (n->component[i] == 0)
 			goto err;
-		strncpy(n->component[i], tok, p - tok);
-		n->component[i][p - tok] = '\0';
 		tok = *p ? p + 1 : p;
 	}
 	return result;
@@ -116,7 +114,7 @@ void context_free(context_t context)
 /*
  * Return a pointer to the string value of the context.
  */
-char *context_str(context_t context)
+const char *context_str(context_t context)
 {
 	context_private_t *n = context->ptr;
 	int i;
@@ -143,25 +141,54 @@ char *context_str(context_t context)
 }
 
 
+/*
+ * Return a new string value of the context.
+ */
+char *context_to_str(context_t context)
+{
+	const context_private_t *n = context->ptr;
+	char *buf;
+	size_t total = 0;
+
+	for (int i = 0; i < 4; i++) {
+		if (n->component[i]) {
+			total += strlen(n->component[i]) + 1;
+		}
+	}
+	buf = malloc(total);
+	if (buf != NULL) {
+		char *cp = buf;
+
+		cp = stpcpy(cp, n->component[0]);
+		for (int i = 1; i < 4; i++) {
+			if (n->component[i]) {
+				*cp++ = ':';
+				cp = stpcpy(cp, n->component[i]);
+			}
+		}
+	}
+	return buf;
+}
+
+
 /* Returns nonzero iff failed */
 static int set_comp(context_private_t * n, int idx, const char *str)
 {
 	char *t = NULL;
 	const char *p;
 	if (str) {
-		t = (char *)malloc(strlen(str) + 1);
-		if (!t) {
-			return -1;
-		}
 		for (p = str; *p; p++) {
 			if (*p == '\t' || *p == '\n' || *p == '\r' ||
 			    ((*p == ':' || *p == ' ') && idx != COMP_RANGE)) {
-				free(t);
 				errno = EINVAL;
 				return -1;
 			}
 		}
-		strcpy(t, str);
+
+		t = strdup(str);
+		if (!t) {
+			return -1;
+		}
 	}
 	conditional_free(&n->component[idx]);
 	n->component[idx] = t;

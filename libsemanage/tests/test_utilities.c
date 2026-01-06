@@ -35,18 +35,20 @@
 #include <unistd.h>
 
 #include "utilities.h"
+#include "test_utilities.h"
 
-void test_semanage_is_prefix(void);
-void test_semanage_split_on_space(void);
-void test_semanage_split(void);
-void test_semanage_list(void);
-void test_semanage_str_count(void);
-void test_semanage_rtrim(void);
-void test_semanage_str_replace(void);
-void test_semanage_findval(void);
-void test_slurp_file_filter(void);
+static void test_semanage_is_prefix(void);
+static void test_semanage_split_on_space(void);
+static void test_semanage_split(void);
+static void test_semanage_list(void);
+static void test_semanage_str_count(void);
+static void test_semanage_rtrim(void);
+static void test_semanage_str_replace(void);
+static void test_semanage_findval(void);
+static void test_slurp_file_filter(void);
+static void test_semanage_basename(void);
 
-char fname[] = {
+static char fname[] = {
 	'T', 'E', 'S', 'T', '_', 'T', 'E', 'M', 'P', '_', 'X', 'X', 'X', 'X',
 	'X', 'X', '\0'
 };
@@ -116,13 +118,17 @@ int semanage_utilities_add_tests(CU_pSuite suite)
 				test_slurp_file_filter)) {
 		goto err;
 	}
+	if (NULL == CU_add_test(suite, "semanage_basename",
+				test_semanage_basename)) {
+		goto err;
+	}
 	return 0;
       err:
 	CU_cleanup_registry();
 	return CU_get_error();
 }
 
-void test_semanage_is_prefix(void)
+static void test_semanage_is_prefix(void)
 {
 	const char *str = "some string";
 	const char *pre = "some";
@@ -134,7 +140,7 @@ void test_semanage_is_prefix(void)
 	CU_ASSERT_FALSE(semanage_is_prefix(str, not_pre));
 }
 
-void test_semanage_split_on_space(void)
+static void test_semanage_split_on_space(void)
 {
 	char *str = strdup("   foo   bar    baz");
 	char *temp;
@@ -163,7 +169,7 @@ void test_semanage_split_on_space(void)
 	free(temp);
 }
 
-void test_semanage_split(void)
+static void test_semanage_split(void)
 {
 	char *str = strdup("foo1 foo2   foo:bar:");
 	char *temp;
@@ -198,7 +204,7 @@ void test_semanage_split(void)
 	free(temp);
 }
 
-void test_semanage_list(void)
+static void test_semanage_list(void)
 {
 	semanage_list_t *list = NULL;
 	semanage_list_t *ptr = NULL;
@@ -247,7 +253,7 @@ void test_semanage_list(void)
 	CU_ASSERT_PTR_NULL(list);
 }
 
-void test_semanage_str_count(void)
+static void test_semanage_str_count(void)
 {
 	const char *test_string = "abaababbaaaba";
 
@@ -256,7 +262,7 @@ void test_semanage_str_count(void)
 	CU_ASSERT_EQUAL(semanage_str_count(test_string, 'b'), 5);
 }
 
-void test_semanage_rtrim(void)
+static void test_semanage_rtrim(void)
 {
 	char *str = strdup("/blah/foo/bar/baz/");
 
@@ -272,7 +278,7 @@ void test_semanage_rtrim(void)
 	free(str);
 }
 
-void test_semanage_str_replace(void)
+static void test_semanage_str_replace(void)
 {
 	const char *test_str = "Hello, I am %{USERNAME} and my id is %{USERID}";
 	char *str1, *str2;
@@ -301,7 +307,7 @@ void test_semanage_str_replace(void)
 	free(str1);
 }
 
-void test_semanage_findval(void)
+static void test_semanage_findval(void)
 {
 	char *tok;
 	if (!fptr) {
@@ -323,12 +329,12 @@ void test_semanage_findval(void)
 	free(tok);
 }
 
-int PREDICATE(const char *str)
+static int PREDICATE(const char *str)
 {
 	return semanage_is_prefix(str, "#");
 }
 
-void test_slurp_file_filter(void)
+static void test_slurp_file_filter(void)
 {
 	semanage_list_t *data, *tmp;
 	int cnt = 0;
@@ -344,4 +350,25 @@ void test_slurp_file_filter(void)
 	CU_ASSERT_EQUAL(cnt, 2);
 
 	semanage_list_destroy(&data);
+}
+
+static void test_semanage_basename(void)
+{
+	char *basename1 = semanage_basename("/foo/bar");
+	CU_ASSERT_STRING_EQUAL(basename1, "bar");
+
+	char *basename2 = semanage_basename("/foo/bar/");
+	CU_ASSERT_STRING_EQUAL(basename2, "");
+
+	char *basename3 = semanage_basename("/foo.bar");
+	CU_ASSERT_STRING_EQUAL(basename3, "foo.bar");
+
+	char *basename5 = semanage_basename(".");
+	CU_ASSERT_STRING_EQUAL(basename5, ".");
+
+	char *basename6 = semanage_basename("");
+	CU_ASSERT_STRING_EQUAL(basename6, "");
+
+	char *basename7 = semanage_basename("/");
+	CU_ASSERT_STRING_EQUAL(basename7, "");
 }

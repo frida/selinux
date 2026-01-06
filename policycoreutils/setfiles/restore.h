@@ -24,6 +24,7 @@ struct restore_opts {
 	unsigned int progress;
 	unsigned int mass_relabel;
 	unsigned int set_specctx;
+	unsigned int set_user_role;
 	unsigned int add_assoc;
 	unsigned int ignore_digest;
 	unsigned int recurse;
@@ -35,6 +36,7 @@ struct restore_opts {
 	unsigned int ignore_noent;
 	unsigned int ignore_mounts;
 	unsigned int conflict_error;
+	unsigned int count_errors;
 	/* restorecon_flags holds | of above for restore_init() */
 	unsigned int restorecon_flags;
 	char *rootpath;
@@ -49,7 +51,8 @@ struct restore_opts {
 void restore_init(struct restore_opts *opts);
 void restore_finish(void);
 void add_exclude(const char *directory);
-int process_glob(char *name, struct restore_opts *opts);
+int process_glob(char *name, struct restore_opts *opts, size_t nthreads,
+		 long unsigned *skipped_errors);
 extern char **exclude_list;
 
 #endif

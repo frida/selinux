@@ -63,6 +63,9 @@ static struct discover_class_node * discover_class(const char *s)
 		return NULL;
 	}
 
+	if (strchr(s, '/') != NULL)
+		return NULL;
+
 	/* allocate a node */
 	node = malloc(sizeof(struct discover_class_node));
 	if (node == NULL)
@@ -79,7 +82,10 @@ static struct discover_class_node * discover_class(const char *s)
 		goto err2;
 
 	/* load up class index */
-	snprintf(path, sizeof path, "%s/class/%s/index", selinux_mnt,s);
+	ret = snprintf(path, sizeof path, "%s/class/%s/index", selinux_mnt,s);
+	if (ret < 0 || (size_t)ret >= sizeof path)
+		goto err3;
+
 	fd = open(path, O_RDONLY | O_CLOEXEC);
 	if (fd < 0)
 		goto err3;
@@ -94,7 +100,10 @@ static struct discover_class_node * discover_class(const char *s)
 		goto err3;
 
 	/* load up permission indices */
-	snprintf(path, sizeof path, "%s/class/%s/perms",selinux_mnt,s);
+	ret = snprintf(path, sizeof path, "%s/class/%s/perms",selinux_mnt,s);
+	if (ret < 0 || (size_t)ret >= sizeof path)
+		goto err3;
+
 	dir = opendir(path);
 	if (dir == NULL)
 		goto err3;
@@ -104,7 +113,10 @@ static struct discover_class_node * discover_class(const char *s)
 		unsigned int value;
 		struct stat m;
 
-		snprintf(path, sizeof path, "%s/class/%s/perms/%s", selinux_mnt,s,dentry->d_name);
+		ret = snprintf(path, sizeof path, "%s/class/%s/perms/%s", selinux_mnt,s,dentry->d_name);
+		if (ret < 0 || (size_t)ret >= sizeof path)
+			goto err4;
+
 		fd = open(path, O_RDONLY | O_CLOEXEC);
 		if (fd < 0)
 			goto err4;
@@ -229,7 +241,7 @@ access_vector_t string_to_av_perm(security_class_t tclass, const char *s)
 		size_t i;
 		for (i = 0; i < MAXVECTORS && node->perms[i] != NULL; i++)
 			if (strcmp(node->perms[i],s) == 0)
-				return map_perm(tclass, 1<<i);
+				return map_perm(tclass, UINT32_C(1)<<i);
 	}
 
 	errno = EINVAL;
@@ -261,7 +273,7 @@ const char *security_av_perm_to_string(security_class_t tclass,
 	node = get_class_cache_entry_value(tclass);
 	if (av && node)
 		for (i = 0; i<MAXVECTORS; i++)
-			if ((1<<i) & av)
+			if ((UINT32_C(1)<<i) & av)
 				return node->perms[i];
 
 	return NULL;
@@ -279,7 +291,7 @@ int security_av_string(security_class_t tclass, access_vector_t av, char **res)
 	/* first pass computes the required length */
 	for (i = 0; tmp; tmp >>= 1, i++) {
 		if (tmp & 1) {
-			str = security_av_perm_to_string(tclass, av & (1<<i));
+			str = security_av_perm_to_string(tclass, av & (UINT32_C(1)<<i));
 			if (str)
 				len += strlen(str) + 1;
 		}
@@ -303,7 +315,7 @@ int security_av_string(security_class_t tclass, access_vector_t av, char **res)
 	ptr += sprintf(ptr, "{ ");
 	for (i = 0; tmp; tmp >>= 1, i++) {
 		if (tmp & 1) {
-			str = security_av_perm_to_string(tclass, av & (1<<i));
+			str = security_av_perm_to_string(tclass, av & (UINT32_C(1)<<i));
 			if (str)
 				ptr += sprintf(ptr, "%s ", str);
 		}
@@ -325,13 +337,15 @@ void print_access_vector(security_class_t tclass, access_vector_t av)
 
 	printf(" {");
 
-	while (av) {
+	for (;;) {
 		if (av & bit) {
 			permstr = security_av_perm_to_string(tclass, bit);
 			if (!permstr)
 				break;
 			printf(" %s", permstr);
 			av &= ~bit;
+			if (!av)
+				break;
 		}
 		bit <<= 1;
 	}

@@ -28,7 +28,7 @@ int define_policy(int pass, int module_header_given);
  */
 int declare_symbol(uint32_t symbol_type,
 		   hashtab_key_t key, hashtab_datum_t datum,
-		   uint32_t * dest_value, uint32_t * datum_value);
+		   uint32_t * dest_value, const uint32_t * datum_value);
 
 role_datum_t *declare_role(unsigned char isattr);
 type_datum_t *declare_type(unsigned char primary, unsigned char isattr);
@@ -65,12 +65,12 @@ int require_cat(int pass);
 /* Check if an identifier is within the scope of the current
  * declaration or any of its parents.  Return 1 if it is, 0 if not.
  * If the identifier is not known at all then return 1 (truth).  */
-int is_id_in_scope(uint32_t symbol_type, hashtab_key_t id);
+int is_id_in_scope(uint32_t symbol_type, const_hashtab_key_t id);
 
 /* Check if a particular permission is within the scope of the current
  * declaration or any of its parents.  Return 1 if it is, 0 if not.
  * If the identifier is not known at all then return 1 (truth).  */
-int is_perm_in_scope(hashtab_key_t perm_id, hashtab_key_t class_id);
+int is_perm_in_scope(const_hashtab_key_t perm_id, const_hashtab_key_t class_id);
 
 /* Search the current avrules block for a conditional with the same
  * expression as 'cond'.  If the conditional does not exist then
@@ -105,5 +105,9 @@ int begin_optional_else(int pass);
  * stack and return 0.  If not then send an error to yyerror and
  * return -1. */
 int end_avrule_block(int pass);
+
+#ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
+void module_compiler_reset(void);
+#endif
 
 #endif

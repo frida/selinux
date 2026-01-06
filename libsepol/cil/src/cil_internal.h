@@ -48,16 +48,19 @@
 
 #define CIL_MAX_NAME_LENGTH 2048
 
+#define CIL_DEGENERATE_INHERITANCE_DEPTH 10UL
+#define CIL_DEGENERATE_INHERITANCE_MINIMUM (0x01 << CIL_DEGENERATE_INHERITANCE_DEPTH)
+#define CIL_DEGENERATE_INHERITANCE_GROWTH 10UL
 
 enum cil_pass {
 	CIL_PASS_INIT = 0,
 
 	CIL_PASS_TIF,
-	CIL_PASS_IN,
+	CIL_PASS_IN_BEFORE,
 	CIL_PASS_BLKIN_LINK,
 	CIL_PASS_BLKIN_COPY,
 	CIL_PASS_BLKABS,
-	CIL_PASS_MACRO,
+	CIL_PASS_IN_AFTER,
 	CIL_PASS_CALL1,
 	CIL_PASS_CALL2,
 	CIL_PASS_ALIAS1,
@@ -98,6 +101,8 @@ extern char *CIL_KEY_CONS_INCOMP;
 extern char *CIL_KEY_CONDTRUE;
 extern char *CIL_KEY_CONDFALSE;
 extern char *CIL_KEY_SELF;
+extern char *CIL_KEY_NOTSELF;
+extern char *CIL_KEY_OTHER;
 extern char *CIL_KEY_OBJECT_R;
 extern char *CIL_KEY_STAR;
 extern char *CIL_KEY_TCP;
@@ -156,6 +161,8 @@ extern char *CIL_KEY_HANDLEUNKNOWN_DENY;
 extern char *CIL_KEY_HANDLEUNKNOWN_REJECT;
 extern char *CIL_KEY_MACRO;
 extern char *CIL_KEY_IN;
+extern char *CIL_KEY_IN_BEFORE;
+extern char *CIL_KEY_IN_AFTER;
 extern char *CIL_KEY_MLS;
 extern char *CIL_KEY_DEFAULTRANGE;
 extern char *CIL_KEY_BLOCKINHERIT;
@@ -181,6 +188,7 @@ extern char *CIL_KEY_TYPEALIAS;
 extern char *CIL_KEY_TYPEALIASACTUAL;
 extern char *CIL_KEY_TYPEBOUNDS;
 extern char *CIL_KEY_TYPEPERMISSIVE;
+extern char *CIL_KEY_TYPENEVERAUDIT;
 extern char *CIL_KEY_RANGETRANSITION;
 extern char *CIL_KEY_USERROLE;
 extern char *CIL_KEY_ROLETYPE;
@@ -231,10 +239,14 @@ extern char *CIL_KEY_DONTAUDITX;
 extern char *CIL_KEY_NEVERALLOWX;
 extern char *CIL_KEY_PERMISSIONX;
 extern char *CIL_KEY_IOCTL;
+extern char *CIL_KEY_NLMSG;
 extern char *CIL_KEY_UNORDERED;
 extern char *CIL_KEY_SRC_INFO;
 extern char *CIL_KEY_SRC_CIL;
-extern char *CIL_KEY_SRC_HLL;
+extern char *CIL_KEY_SRC_HLL_LMS;
+extern char *CIL_KEY_SRC_HLL_LMX;
+extern char *CIL_KEY_SRC_HLL_LME;
+extern char *CIL_KEY_DENY_RULE;
 
 /*
 	Symbol Table Array Indices
@@ -257,7 +269,7 @@ enum cil_sym_index {
 	CIL_SYM_LEVELRANGES,
 	CIL_SYM_POLICYCAPS,
 	CIL_SYM_IPADDRS,
-	CIL_SYM_NAMES,
+	CIL_SYM_STRINGS,
 	CIL_SYM_PERMX,
 	CIL_SYM_NUM,
 	CIL_SYM_UNKNOWN,
@@ -273,7 +285,7 @@ enum cil_sym_array {
 	CIL_SYM_ARRAY_NUM
 };
 
-extern int cil_sym_sizes[CIL_SYM_ARRAY_NUM][CIL_SYM_NUM];
+extern const int cil_sym_sizes[CIL_SYM_ARRAY_NUM][CIL_SYM_NUM];
 
 #define CIL_CLASS_SYM_SIZE	256
 #define CIL_PERMS_PER_CLASS (sizeof(sepol_access_vector_t) * 8)
@@ -282,6 +294,8 @@ struct cil_db {
 	struct cil_tree *parse;
 	struct cil_tree *ast;
 	struct cil_type *selftype;
+	struct cil_type *notselftype;
+	struct cil_type *othertype;
 	struct cil_list *sidorder;
 	struct cil_list *classorder;
 	struct cil_list *catorder;
@@ -301,7 +315,7 @@ struct cil_db {
 	struct cil_sort *fsuse;
 	struct cil_list *userprefixes;
 	struct cil_list *selinuxusers;
-	struct cil_list *names;
+	struct cil_list *declared_strings;
 	int num_types_and_attrs;
 	int num_classes;
 	int num_cats;
@@ -319,6 +333,7 @@ struct cil_db {
 	int handle_unknown;
 	int mls;
 	int multiple_decls;
+	int qualified_names;
 	int target_platform;
 	int policy_version;
 };
@@ -332,6 +347,12 @@ struct cil_sort {
 	uint32_t count;
 	uint32_t index;
 	void **array;
+};
+
+struct cil_ordered {
+	int merged;
+	struct cil_list *strs;
+	struct cil_list *datums;
 };
 
 struct cil_block {
@@ -348,16 +369,18 @@ struct cil_blockinherit {
 
 struct cil_blockabstract {
 	char *block_str;
+	struct cil_block *block;
 };
 
 struct cil_in {
 	symtab_t symtab[CIL_SYM_NUM];
+	int is_after;
 	char *block_str;
+	struct cil_block *block;
 };
 
 struct cil_optional {
 	struct cil_symtab_datum datum;
-	int enabled;
 };
 
 struct cil_perm {
@@ -372,10 +395,6 @@ struct cil_class {
 	unsigned int num_perms;
 	struct cil_class *common; /* Only used for kernel class */
 	uint32_t ordered; /* Only used for kernel class */
-};
-
-struct cil_classorder {
-	struct cil_list *class_list_str;
 };
 
 struct cil_classperms_set {
@@ -397,18 +416,23 @@ struct cil_classpermission {
 
 struct cil_classpermissionset {
 	char *set_str;
+	struct cil_classpermission *set;
 	struct cil_list *classperms;
 };
 
 struct cil_classmapping {
 	char *map_class_str;
+	struct cil_class *map_class;
 	char *map_perm_str;
+	struct cil_perm *map_perm;
 	struct cil_list *classperms;
 };
 
 struct cil_classcommon {
 	char *class_str;
+	struct cil_class *class;
 	char *common_str;
+	struct cil_class *common;
 };
 
 struct cil_alias {
@@ -418,7 +442,9 @@ struct cil_alias {
 
 struct cil_aliasactual {
 	char *alias_str;
+	void *alias;
 	char *actual_str;
+	void *actual;
 };
 
 struct cil_sid {
@@ -429,12 +455,9 @@ struct cil_sid {
 
 struct cil_sidcontext {
 	char *sid_str;
+	struct cil_sid *sid;
 	char *context_str;
 	struct cil_context *context;
-};
-
-struct cil_sidorder {
-	struct cil_list *sid_list_str;
 };
 
 struct cil_user {
@@ -454,6 +477,7 @@ struct cil_userattribute {
 
 struct cil_userattributeset {
 	char *attr_str;
+	struct cil_userattribute *attr;
 	struct cil_list *str_expr;
 	struct cil_list *datum_expr;
 };
@@ -467,12 +491,14 @@ struct cil_userrole {
 
 struct cil_userlevel {
 	char *user_str;
+	void *user;
 	char *level_str;
 	struct cil_level *level;
 };
 
 struct cil_userrange {
 	char *user_str;
+	void *user;
 	char *range_str;
 	struct cil_levelrange *range;
 };
@@ -506,6 +532,7 @@ struct cil_roleattribute {
 
 struct cil_roleattributeset {
 	char *attr_str;
+	struct cil_roleattribute *attr;
 	struct cil_list *str_expr;
 	struct cil_list *datum_expr;
 };
@@ -538,6 +565,7 @@ struct cil_typeattribute {
 
 struct cil_typeattributeset {
 	char *attr_str;
+	struct cil_typeattribute *attr;
 	struct cil_list *str_expr;
 	struct cil_list *datum_expr;
 };
@@ -553,9 +581,9 @@ struct cil_typepermissive {
 	void *type; /* type or alias */
 };
 
-struct cil_name {
-	struct cil_symtab_datum datum;
-	char *name_str;
+struct cil_typeneveraudit {
+	char *type_str;
+	void *type; /* type or alias */
 };
 
 struct cil_nametypetransition {
@@ -566,7 +594,7 @@ struct cil_nametypetransition {
 	char *obj_str;
 	struct cil_class *obj;
 	char *name_str;
-	struct cil_name *name;
+	struct cil_symtab_datum *name;
 	char *result_str;
 	void *result; /* type or alias */
 
@@ -615,6 +643,7 @@ struct cil_avrule {
 };
 
 #define CIL_PERMX_KIND_IOCTL 1
+#define CIL_PERMX_KIND_NLMSG 2
 struct cil_permissionx {
 	struct cil_symtab_datum datum;
 	uint32_t kind;
@@ -622,6 +651,14 @@ struct cil_permissionx {
 	struct cil_class *obj;
 	struct cil_list *expr_str;
 	ebitmap_t *perms;
+};
+
+struct cil_deny_rule {
+	char *src_str;
+	void *src; /* type, alias, or attribute */
+	char *tgt_str;
+	void *tgt; /* type, alias, or attribute */
+	struct cil_list *classperms;
 };
 
 #define CIL_TYPE_TRANSITION 16
@@ -664,10 +701,6 @@ struct cil_sens {
 	uint32_t ordered;
 };
 
-struct cil_sensorder {
-	struct cil_list *sens_list_str;
-};
-
 struct cil_cat {
 	struct cil_symtab_datum datum;
 	uint32_t ordered;
@@ -685,12 +718,9 @@ struct cil_catset {
 	struct cil_cats *cats;
 };
 
-struct cil_catorder {
-	struct cil_list *cat_list_str;
-};
-
 struct cil_senscat {
 	char *sens_str;
+	struct cil_sens *sens;
 	struct cil_cats *cats;
 };
 
@@ -722,18 +752,19 @@ struct cil_context {
 };
 
 enum cil_filecon_types {
-	CIL_FILECON_FILE = 1,
+	CIL_FILECON_ANY = 0,
+	CIL_FILECON_FILE,
 	CIL_FILECON_DIR,
 	CIL_FILECON_CHAR,
 	CIL_FILECON_BLOCK,
 	CIL_FILECON_SOCKET,
 	CIL_FILECON_PIPE,
 	CIL_FILECON_SYMLINK,
-	CIL_FILECON_ANY
 };
 
 struct cil_filecon {
 	char *path_str;
+	struct cil_symtab_datum *path;
 	enum cil_filecon_types type;
 	char *context_str;
 	struct cil_context *context;
@@ -783,6 +814,7 @@ struct cil_ipaddr {
 struct cil_genfscon {
 	char *fs_str;
 	char *path_str;
+	enum cil_filecon_types file_type;
 	char *context_str;
 	struct cil_context *context;
 };
@@ -917,7 +949,9 @@ struct cil_policycap {
 
 struct cil_bounds {
 	char *parent_str;
+	void *parent;
 	char *child_str;
+	void *child;
 };
 
 /* Ensure that CIL uses the same values as sepol policydb.h */
@@ -961,7 +995,8 @@ struct cil_mls {
 };
 
 struct cil_src_info {
-	int is_cil;
+	char *kind;
+	uint32_t hll_line;
 	char *path;
 };
 
@@ -980,13 +1015,16 @@ int cil_userprefixes_to_string(struct cil_db *db, char **out, size_t *size);
 int cil_selinuxusers_to_string(struct cil_db *db, char **out, size_t *size);
 int cil_filecons_to_string(struct cil_db *db, char **out, size_t *size);
 
-void cil_symtab_array_init(symtab_t symtab[], int symtab_sizes[CIL_SYM_NUM]);
+void cil_symtab_array_init(symtab_t symtab[], const int symtab_sizes[CIL_SYM_NUM]);
 void cil_symtab_array_destroy(symtab_t symtab[]);
 void cil_destroy_ast_symtabs(struct cil_tree_node *root);
 int cil_get_symtab(struct cil_tree_node *ast_node, symtab_t **symtab, enum cil_sym_index sym_index);
+int cil_string_to_uint32(const char *string, uint32_t *value, int base);
+int cil_string_to_uint64(const char *string, uint64_t *value, int base);
 
 void cil_sort_init(struct cil_sort **sort);
 void cil_sort_destroy(struct cil_sort **sort);
+void cil_ordered_init(struct cil_ordered **ordered);
 void cil_netifcon_init(struct cil_netifcon **netifcon);
 void cil_ibendportcon_init(struct cil_ibendportcon **ibendportcon);
 void cil_context_init(struct cil_context **context);
@@ -998,11 +1036,9 @@ void cil_blockinherit_init(struct cil_blockinherit **inherit);
 void cil_blockabstract_init(struct cil_blockabstract **abstract);
 void cil_in_init(struct cil_in **in);
 void cil_class_init(struct cil_class **class);
-void cil_classorder_init(struct cil_classorder **classorder);
 void cil_classcommon_init(struct cil_classcommon **classcommon);
 void cil_sid_init(struct cil_sid **sid);
 void cil_sidcontext_init(struct cil_sidcontext **sidcontext);
-void cil_sidorder_init(struct cil_sidorder **sidorder);
 void cil_userrole_init(struct cil_userrole **userrole);
 void cil_userprefix_init(struct cil_userprefix **userprefix);
 void cil_selinuxuser_init(struct cil_selinuxuser **selinuxuser);
@@ -1015,7 +1051,7 @@ void cil_expandtypeattribute_init(struct cil_expandtypeattribute **expandattr);
 void cil_alias_init(struct cil_alias **alias);
 void cil_aliasactual_init(struct cil_aliasactual **aliasactual);
 void cil_typepermissive_init(struct cil_typepermissive **typeperm);
-void cil_name_init(struct cil_name **name);
+void cil_typeneveraudit_init(struct cil_typeneveraudit **typeperm);
 void cil_nametypetransition_init(struct cil_nametypetransition **nametypetrans);
 void cil_rangetransition_init(struct cil_rangetransition **rangetrans);
 void cil_bool_init(struct cil_bool **cilbool);
@@ -1025,6 +1061,7 @@ void cil_tunable_init(struct cil_tunable **ciltun);
 void cil_tunif_init(struct cil_tunableif **tif);
 void cil_avrule_init(struct cil_avrule **avrule);
 void cil_permissionx_init(struct cil_permissionx **permx);
+void cil_deny_rule_init(struct cil_deny_rule **rule);
 void cil_type_rule_init(struct cil_type_rule **type_rule);
 void cil_roletransition_init(struct cil_roletransition **roletrans);
 void cil_roleallow_init(struct cil_roleallow **role_allow);
@@ -1057,8 +1094,6 @@ void cil_userrange_init(struct cil_userrange **userrange);
 void cil_role_init(struct cil_role **role);
 void cil_type_init(struct cil_type **type);
 void cil_cat_init(struct cil_cat **cat);
-void cil_catorder_init(struct cil_catorder **catorder);
-void cil_sensorder_init(struct cil_sensorder **sensorder);
 void cil_args_init(struct cil_args **args);
 void cil_call_init(struct cil_call **call);
 void cil_optional_init(struct cil_optional **optional);

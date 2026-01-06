@@ -18,26 +18,15 @@
 #include <sepol/policydb/hashtab.h>
 #include <sepol/policydb/symtab.h>
 
+#include "debug.h"
+#include "private.h"
 #include "kernel_to_common.h"
 
-
-void sepol_log_err(const char *fmt, ...)
-{
-	va_list argptr;
-	va_start(argptr, fmt);
-	if (vfprintf(stderr, fmt, argptr) < 0) {
-		_exit(EXIT_FAILURE);
-	}
-	va_end(argptr);
-	if (fprintf(stderr, "\n") < 0) {
-		_exit(EXIT_FAILURE);
-	}
-}
 
 void sepol_indent(FILE *out, int indent)
 {
 	if (fprintf(out, "%*s", indent * 4, "") < 0) {
-		sepol_log_err("Failed to write to output");
+		ERR(NULL, "Failed to write to output");
 	}
 }
 
@@ -46,58 +35,23 @@ void sepol_printf(FILE *out, const char *fmt, ...)
 	va_list argptr;
 	va_start(argptr, fmt);
 	if (vfprintf(out, fmt, argptr) < 0) {
-		sepol_log_err("Failed to write to output");
+		ERR(NULL, "Failed to write to output");
 	}
 	va_end(argptr);
 }
 
-__attribute__ ((format(printf, 1, 0)))
-static char *create_str_helper(const char *fmt, int num, va_list vargs)
+char *create_str(const char *fmt, ...)
 {
-	va_list vargs2;
-	char *str = NULL;
-	char *s;
-	size_t len;
-	int i, rc;
-
-	va_copy(vargs2, vargs);
-
-	len = strlen(fmt) + 1; /* +1 for '\0' */
-
-	for (i=0; i<num; i++) {
-		s = va_arg(vargs, char *);
-		len += strlen(s) - 2; /* -2 for each %s in fmt */
-	}
-
-	str = malloc(len);
-	if (!str) {
-		sepol_log_err("Out of memory");
-		goto exit;
-	}
-
-	rc = vsnprintf(str, len, fmt, vargs2);
-	if (rc < 0 || rc >= (int)len) {
-		goto exit;
-	}
-
-	va_end(vargs2);
-
-	return str;
-
-exit:
-	free(str);
-	va_end(vargs2);
-	return NULL;
-}
-
-char *create_str(const char *fmt, int num, ...)
-{
-	char *str = NULL;
+	char *str;
 	va_list vargs;
+	int rc;
 
-	va_start(vargs, num);
-	str = create_str_helper(fmt, num, vargs);
+	va_start(vargs, fmt);
+	rc = vasprintf(&str, fmt, vargs);
 	va_end(vargs);
+
+	if (rc == -1)
+		return NULL;
 
 	return str;
 }
@@ -106,17 +60,21 @@ int strs_init(struct strs **strs, size_t size)
 {
 	struct strs *new;
 
+	if (size == 0) {
+		size = 1;
+	}
+
 	*strs = NULL;
 
 	new = malloc(sizeof(struct strs));
 	if (!new) {
-		sepol_log_err("Out of memory");
+		ERR(NULL, "Out of memory");
 		return -1;
 	}
 
-	new->list = calloc(sizeof(char *), size);
+	new->list = calloc(size, sizeof(char *));
 	if (!new->list) {
-		sepol_log_err("Out of memory");
+		ERR(NULL, "Out of memory");
 		free(new);
 		return -1;
 	}
@@ -159,11 +117,11 @@ int strs_add(struct strs *strs, char *s)
 {
 	if (strs->num + 1 > strs->size) {
 		char **new;
-		unsigned i = strs->size;
+		size_t i = strs->size;
 		strs->size *= 2;
-		new = realloc(strs->list, sizeof(char *)*strs->size);
+		new = reallocarray(strs->list, strs->size, sizeof(char *));
 		if (!new) {
-			sepol_log_err("Out of memory");
+			ERR(NULL, "Out of memory");
 			return -1;
 		}
 		strs->list = new;
@@ -176,20 +134,18 @@ int strs_add(struct strs *strs, char *s)
 	return 0;
 }
 
-int strs_create_and_add(struct strs *strs, const char *fmt, int num, ...)
+int strs_create_and_add(struct strs *strs, const char *fmt, ...)
 {
 	char *str;
 	va_list vargs;
 	int rc;
 
-	va_start(vargs, num);
-	str = create_str_helper(fmt, num, vargs);
+	va_start(vargs, fmt);
+	rc = vasprintf(&str, fmt, vargs);
 	va_end(vargs);
 
-	if (!str) {
-		rc = -1;
+	if (rc == -1)
 		goto exit;
-	}
 
 	rc = strs_add(strs, str);
 	if (rc != 0) {
@@ -212,17 +168,17 @@ char *strs_remove_last(struct strs *strs)
 	return strs->list[strs->num];
 }
 
-int strs_add_at_index(struct strs *strs, char *s, unsigned index)
+int strs_add_at_index(struct strs *strs, char *s, size_t index)
 {
 	if (index >= strs->size) {
 		char **new;
-		unsigned i = strs->size;
+		size_t i = strs->size;
 		while (index >= strs->size) {
 			strs->size *= 2;
 		}
-		new = realloc(strs->list, sizeof(char *)*strs->size);
+		new = reallocarray(strs->list, strs->size, sizeof(char *));
 		if (!new) {
-			sepol_log_err("Out of memory");
+			ERR(NULL, "Out of memory");
 			return -1;
 		}
 		strs->list = new;
@@ -237,7 +193,7 @@ int strs_add_at_index(struct strs *strs, char *s, unsigned index)
 	return 0;
 }
 
-char *strs_read_at_index(struct strs *strs, unsigned index)
+char *strs_read_at_index(struct strs *strs, size_t index)
 {
 	if (index >= strs->num) {
 		return NULL;
@@ -261,12 +217,12 @@ void strs_sort(struct strs *strs)
 	qsort(strs->list, strs->num, sizeof(char *), strs_cmp);
 }
 
-unsigned strs_num_items(struct strs *strs)
+unsigned strs_num_items(const struct strs *strs)
 {
 	return strs->num;
 }
 
-size_t strs_len_items(struct strs *strs)
+size_t strs_len_items(const struct strs *strs)
 {
 	unsigned i;
 	size_t len = 0;
@@ -279,7 +235,7 @@ size_t strs_len_items(struct strs *strs)
 	return len;
 }
 
-char *strs_to_str(struct strs *strs)
+char *strs_to_str(const struct strs *strs)
 {
 	char *str = NULL;
 	size_t len = 0;
@@ -295,7 +251,7 @@ char *strs_to_str(struct strs *strs)
 	len = strs_len_items(strs) + strs->num;
 	str = malloc(len);
 	if (!str) {
-		sepol_log_err("Out of memory");
+		ERR(NULL, "Out of memory");
 		goto exit;
 	}
 
@@ -321,7 +277,7 @@ exit:
 	return str;
 }
 
-void strs_write_each(struct strs *strs, FILE *out)
+void strs_write_each(const struct strs *strs, FILE *out)
 {
 	unsigned i;
 
@@ -333,7 +289,7 @@ void strs_write_each(struct strs *strs, FILE *out)
 	}
 }
 
-void strs_write_each_indented(struct strs *strs, FILE *out, int indent)
+void strs_write_each_indented(const struct strs *strs, FILE *out, int indent)
 {
 	unsigned i;
 
@@ -354,13 +310,16 @@ int hashtab_ordered_to_strs(char *key, void *data, void *args)
 	return strs_add_at_index(strs, key, datum->value-1);
 }
 
-int ebitmap_to_strs(struct ebitmap *map, struct strs *strs, char **val_to_name)
+int ebitmap_to_strs(const struct ebitmap *map, struct strs *strs, char **val_to_name)
 {
 	struct ebitmap_node *node;
 	uint32_t i;
 	int rc;
 
 	ebitmap_for_each_positive_bit(map, node, i) {
+		if (!val_to_name[i])
+			continue;
+
 		rc = strs_add(strs, val_to_name[i]);
 		if (rc != 0) {
 			return -1;
@@ -370,7 +329,7 @@ int ebitmap_to_strs(struct ebitmap *map, struct strs *strs, char **val_to_name)
 	return 0;
 }
 
-char *ebitmap_to_str(struct ebitmap *map, char **val_to_name, int sort)
+char *ebitmap_to_str(const struct ebitmap *map, char **val_to_name, int sort)
 {
 	struct strs *strs;
 	char *str = NULL;
@@ -418,9 +377,57 @@ char *strs_stack_pop(struct strs *stack)
 	return strs_remove_last(stack);
 }
 
-int strs_stack_empty(struct strs *stack)
+int strs_stack_empty(const struct strs *stack)
 {
 	return strs_num_items(stack) == 0;
+}
+
+struct strs *isids_to_strs(const char *const *sid_to_str, unsigned num_sids, struct ocontext *isids)
+{
+	struct ocontext *isid;
+	struct strs *strs;
+	char *sid;
+	char unknown[18];
+	unsigned i, max;
+	int rc;
+
+	rc = strs_init(&strs, num_sids+1);
+	if (rc != 0) {
+		goto exit;
+	}
+
+	max = 0;
+	for (isid = isids; isid != NULL; isid = isid->next) {
+		i = isid->sid[0];
+		if (i > max) {
+			max = i;
+		}
+	}
+
+	for (i=1; i <= max; i++) {
+		if (i < num_sids && sid_to_str[i]) {
+			sid = strdup(sid_to_str[i]);
+		} else {
+			snprintf(unknown, 18, "%s%u", "UNKNOWN", i);
+			sid = strdup(unknown);
+		}
+		if (!sid) {
+			ERR(NULL, "Out of memory");
+			goto exit;
+		}
+		rc = strs_add_at_index(strs, sid, i);
+		if (rc != 0) {
+			free(sid);
+			goto exit;
+		}
+	}
+
+	return strs;
+
+exit:
+	strs_free_all(strs);
+	strs_destroy(&strs);
+	return NULL;
 }
 
 static int compare_ranges(uint64_t l1, uint64_t h1, uint64_t l2, uint64_t h2)
@@ -482,10 +489,40 @@ static int portcon_data_cmp(const void *a, const void *b)
 
 static int netif_data_cmp(const void *a, const void *b)
 {
-	struct ocontext *const *aa = a;
-	struct ocontext *const *bb = b;
+	/* keep in sync with cil_post.c:cil_post_netifcon_compare() */
+	const struct ocontext *const *aa = a;
+	const struct ocontext *const *bb = b;
+	const char *a_name = (*aa)->u.name;
+	const char *b_name = (*bb)->u.name;
+	size_t a_stem = strcspn(a_name, "*?");
+	size_t b_stem = strcspn(b_name, "*?");
+	size_t a_len = strlen(a_name);
+	size_t b_len = strlen(b_name);
+	int a_iswildcard = a_stem != a_len;
+	int b_iswildcard = b_stem != b_len;
+	int rc;
 
-	return strcmp((*aa)->u.name, (*bb)->u.name);
+	/* order non-wildcards first */
+	rc = spaceship_cmp(a_iswildcard, b_iswildcard);
+	if (rc)
+		return rc;
+
+	/* order non-wildcards alphabetically */
+	if (!a_iswildcard)
+		return strcmp(a_name, b_name);
+
+	/* order by decreasing stem length */
+	rc = spaceship_cmp(a_stem, b_stem);
+	if (rc)
+		return -rc;
+
+	/* order '?' (0x3f) before '*' (0x2A) */
+	rc = spaceship_cmp(a_name[a_stem], b_name[b_stem]);
+	if (rc)
+		return -rc;
+
+	/* order alphabetically */
+	return strcmp(a_name, b_name);
 }
 
 static int node_data_cmp(const void *a, const void *b)
@@ -544,7 +581,7 @@ static int ibendport_data_cmp(const void *a, const void *b)
 	if (rc)
 		return rc;
 
-	return (*aa)->u.ibendport.port - (*bb)->u.ibendport.port;
+	return spaceship_cmp((*aa)->u.ibendport.port, (*bb)->u.ibendport.port);
 }
 
 static int pirq_data_cmp(const void *a, const void *b)
@@ -616,9 +653,9 @@ static int sort_ocontext_data(struct ocontext **ocons, int (*cmp)(const void *, 
 		return 0;
 	}
 
-	data = calloc(sizeof(*data), num);
+	data = calloc(num, sizeof(*data));
 	if (!data) {
-		sepol_log_err("Out of memory\n");
+		ERR(NULL, "Out of memory");
 		return -1;
 	}
 
@@ -709,7 +746,7 @@ int sort_ocontexts(struct policydb *pdb)
 
 exit:
 	if (rc != 0) {
-		sepol_log_err("Error sorting ocontexts\n");
+		ERR(NULL, "Error sorting ocontexts");
 	}
 
 	return rc;

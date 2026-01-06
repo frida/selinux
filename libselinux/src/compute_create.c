@@ -13,7 +13,7 @@
 
 static int object_name_encode(const char *objname, char *buffer, size_t buflen)
 {
-	int	code;
+	unsigned char code;
 	size_t	offset = 0;
 
 	if (buflen - offset < 1)
@@ -33,7 +33,7 @@ static int object_name_encode(const char *objname, char *buffer, size_t buflen)
 				return -1;
 			buffer[offset++] = '+';
 		} else {
-			static const char *table = "0123456789ABCDEF";
+			static const char *const table = "0123456789ABCDEF";
 			int	l = (code & 0x0f);
 			int	h = (code & 0xf0) >> 4;
 
@@ -75,33 +75,39 @@ int security_compute_create_name_raw(const char * scon,
 		ret = -1;
 		goto out;
 	}
+
 	len = snprintf(buf, size, "%s %s %hu",
 		       scon, tcon, unmap_class(tclass));
+	if (len < 0 || (size_t)len >= size) {
+		errno = EOVERFLOW;
+		ret = -1;
+		goto out;
+	}
+
 	if (objname &&
 	    object_name_encode(objname, buf + len, size - len) < 0) {
 		errno = ENAMETOOLONG;
 		ret = -1;
-		goto out2;
+		goto out;
 	}
 
 	ret = write(fd, buf, strlen(buf));
 	if (ret < 0)
-		goto out2;
+		goto out;
 
 	memset(buf, 0, size);
 	ret = read(fd, buf, size - 1);
 	if (ret < 0)
-		goto out2;
+		goto out;
 
 	*newcon = strdup(buf);
 	if (!(*newcon)) {
 		ret = -1;
-		goto out2;
+		goto out;
 	}
 	ret = 0;
-      out2:
-	free(buf);
       out:
+	free(buf);
 	close(fd);
 	return ret;
 }

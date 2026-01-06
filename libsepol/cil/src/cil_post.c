@@ -27,6 +27,7 @@
  * either expressed or implied, of Tresys Technology, LLC.
  */
 
+#include <stddef.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -46,9 +47,18 @@
 #include "cil_policy.h"
 #include "cil_verify.h"
 #include "cil_symtab.h"
+#include "cil_deny.h"
 
 #define GEN_REQUIRE_ATTR "cil_gen_require" /* Also in libsepol/src/module_to_cil.c */
 #define TYPEATTR_INFIX "_typeattr_"        /* Also in libsepol/src/module_to_cil.c */
+
+#define spaceship_cmp(a, b) (((a) > (b)) - ((a) < (b)))
+
+struct fc_data {
+	unsigned int meta;
+	size_t stem_len;
+	size_t str_len;
+};
 
 static int __cil_expr_to_bitmap(struct cil_list *expr, ebitmap_t *out, int max, struct cil_db *db);
 static int __cil_expr_list_to_bitmap(struct cil_list *expr_list, ebitmap_t *out, int max, struct cil_db *db);
@@ -156,9 +166,9 @@ static int cil_verify_is_list(struct cil_list *list, enum cil_flavor flavor)
 	return CIL_TRUE;
 }
 
-void cil_post_fc_fill_data(struct fc_data *fc, char *path)
+static void cil_post_fc_fill_data(struct fc_data *fc, const char *path)
 {
-	int c = 0;
+	size_t c = 0;
 	fc->meta = 0;
 	fc->stem_len = 0;
 	fc->str_len = 0;
@@ -179,6 +189,13 @@ void cil_post_fc_fill_data(struct fc_data *fc, char *path)
 			break;
 		case '\\':
 			c++;
+			if (path[c] == '\0') {
+				if (!fc->meta) {
+					fc->stem_len++;
+				}
+				fc->str_len++;
+				return;
+			}
 			/* FALLTHRU */
 		default:
 			if (!fc->meta) {
@@ -198,12 +215,16 @@ int cil_post_filecon_compare(const void *a, const void *b)
 	struct cil_filecon *b_filecon = *(struct cil_filecon**)b;
 	struct fc_data *a_data = cil_malloc(sizeof(*a_data));
 	struct fc_data *b_data = cil_malloc(sizeof(*b_data));
-	char *a_path = cil_malloc(strlen(a_filecon->path_str) + 1);
+	char *a_path_str, *a_path, *b_path_str, *b_path;
+
+	a_path_str = a_filecon->path ? DATUM(a_filecon->path)->fqn : a_filecon->path_str;
+	b_path_str = b_filecon->path ? DATUM(b_filecon->path)->fqn : b_filecon->path_str;
+	a_path = cil_malloc(strlen(a_path_str) + 1);
+	b_path = cil_malloc(strlen(b_path_str) + 1);
 	a_path[0] = '\0';
-	char *b_path = cil_malloc(strlen(b_filecon->path_str) + 1);
 	b_path[0] = '\0';
-	strcat(a_path, a_filecon->path_str);
-	strcat(b_path, b_filecon->path_str);
+	strcat(a_path, a_path_str);
+	strcat(b_path, b_path_str);
 	cil_post_fc_fill_data(a_data, a_path);
 	cil_post_fc_fill_data(b_data, b_path);
 	if (a_data->meta && !b_data->meta) {
@@ -223,7 +244,7 @@ int cil_post_filecon_compare(const void *a, const void *b)
 	} else if (b_filecon->type < a_filecon->type) {
 		rc = 1;
 	} else {
-		rc = strcmp(a_filecon->path_str, b_filecon->path_str);
+		rc = strcmp(a_path_str, b_path_str);
 	}
 
 	free(a_path);
@@ -244,8 +265,8 @@ int cil_post_ibpkeycon_compare(const void *a, const void *b)
 	if (rc)
 		return rc;
 
-	rc = (aibpkeycon->pkey_high - aibpkeycon->pkey_low)
-		- (bibpkeycon->pkey_high - bibpkeycon->pkey_low);
+	rc = spaceship_cmp(aibpkeycon->pkey_high - aibpkeycon->pkey_low,
+		bibpkeycon->pkey_high - bibpkeycon->pkey_low);
 	if (rc == 0) {
 		if (aibpkeycon->pkey_low < bibpkeycon->pkey_low)
 			rc = -1;
@@ -262,8 +283,8 @@ int cil_post_portcon_compare(const void *a, const void *b)
 	struct cil_portcon *aportcon = *(struct cil_portcon**)a;
 	struct cil_portcon *bportcon = *(struct cil_portcon**)b;
 
-	rc = (aportcon->port_high - aportcon->port_low) 
-		- (bportcon->port_high - bportcon->port_low);
+	rc = spaceship_cmp(aportcon->port_high - aportcon->port_low,
+		bportcon->port_high - bportcon->port_low);
 	if (rc == 0) {
 		if (aportcon->port_low < bportcon->port_low) {
 			rc = -1;
@@ -295,10 +316,40 @@ int cil_post_genfscon_compare(const void *a, const void *b)
 
 int cil_post_netifcon_compare(const void *a, const void *b)
 {
-	struct cil_netifcon *anetifcon = *(struct cil_netifcon**)a;
-	struct cil_netifcon *bnetifcon = *(struct cil_netifcon**)b;
+	/* keep in sync with kernel_to_common.c:netif_data_cmp() */
+	const struct cil_netifcon *anetifcon = *(struct cil_netifcon**)a;
+	const struct cil_netifcon *bnetifcon = *(struct cil_netifcon**)b;
+	const char *a_name = anetifcon->interface_str;
+	const char *b_name = bnetifcon->interface_str;
+	size_t a_stem = strcspn(a_name, "*?");
+	size_t b_stem = strcspn(b_name, "*?");
+	size_t a_len = strlen(a_name);
+	size_t b_len = strlen(b_name);
+	int a_iswildcard = a_stem != a_len;
+	int b_iswildcard = b_stem != b_len;
+	int rc;
 
-	return  strcmp(anetifcon->interface_str, bnetifcon->interface_str);
+	/* order non-wildcards first */
+	rc = spaceship_cmp(a_iswildcard, b_iswildcard);
+	if (rc)
+		return rc;
+
+	/* order non-wildcards alphabetically */
+	if (!a_iswildcard)
+		return strcmp(a_name, b_name);
+
+	/* order by decreasing stem length */
+	rc = spaceship_cmp(a_stem, b_stem);
+	if (rc)
+		return -rc;
+
+	/* order '?' (0x3f) before '*' (0x2A) */
+	rc = spaceship_cmp(a_name[a_stem], b_name[b_stem]);
+	if (rc)
+		return -rc;
+
+	/* order alphabetically */
+	return strcmp(a_name, b_name);
 }
 
 int cil_post_ibendportcon_compare(const void *a, const void *b)
@@ -352,7 +403,7 @@ int cil_post_nodecon_compare(const void *a, const void *b)
 	}
 }
 
-int cil_post_pirqcon_compare(const void *a, const void *b)
+static int cil_post_pirqcon_compare(const void *a, const void *b)
 {
 	int rc = SEPOL_ERR;
 	struct cil_pirqcon *apirqcon = *(struct cil_pirqcon**)a;
@@ -369,14 +420,14 @@ int cil_post_pirqcon_compare(const void *a, const void *b)
 	return rc;
 }
 
-int cil_post_iomemcon_compare(const void *a, const void *b)
+static int cil_post_iomemcon_compare(const void *a, const void *b)
 {
 	int rc = SEPOL_ERR;
 	struct cil_iomemcon *aiomemcon = *(struct cil_iomemcon**)a;
 	struct cil_iomemcon *biomemcon = *(struct cil_iomemcon**)b;
 
-	rc = (aiomemcon->iomem_high - aiomemcon->iomem_low) 
-		- (biomemcon->iomem_high - biomemcon->iomem_low);
+	rc = spaceship_cmp(aiomemcon->iomem_high - aiomemcon->iomem_low,
+		biomemcon->iomem_high - biomemcon->iomem_low);
 	if (rc == 0) {
 		if (aiomemcon->iomem_low < biomemcon->iomem_low) {
 			rc = -1;
@@ -388,14 +439,14 @@ int cil_post_iomemcon_compare(const void *a, const void *b)
 	return rc;
 }
 
-int cil_post_ioportcon_compare(const void *a, const void *b)
+static int cil_post_ioportcon_compare(const void *a, const void *b)
 {
 	int rc = SEPOL_ERR;
 	struct cil_ioportcon *aioportcon = *(struct cil_ioportcon**)a;
 	struct cil_ioportcon *bioportcon = *(struct cil_ioportcon**)b;
 
-	rc = (aioportcon->ioport_high - aioportcon->ioport_low) 
-		- (bioportcon->ioport_high - bioportcon->ioport_low);
+	rc = spaceship_cmp(aioportcon->ioport_high - aioportcon->ioport_low,
+		bioportcon->ioport_high - bioportcon->ioport_low);
 	if (rc == 0) {
 		if (aioportcon->ioport_low < bioportcon->ioport_low) {
 			rc = -1;
@@ -407,7 +458,7 @@ int cil_post_ioportcon_compare(const void *a, const void *b)
 	return rc;
 }
 
-int cil_post_pcidevicecon_compare(const void *a, const void *b)
+static int cil_post_pcidevicecon_compare(const void *a, const void *b)
 {
 	int rc = SEPOL_ERR;
 	struct cil_pcidevicecon *apcidevicecon = *(struct cil_pcidevicecon**)a;
@@ -424,7 +475,7 @@ int cil_post_pcidevicecon_compare(const void *a, const void *b)
 	return rc;
 }
 
-int cil_post_devicetreecon_compare(const void *a, const void *b)
+static int cil_post_devicetreecon_compare(const void *a, const void *b)
 {
 	int rc = SEPOL_ERR;
 	struct cil_devicetreecon *adevicetreecon = *(struct cil_devicetreecon**)a;
@@ -452,35 +503,35 @@ int cil_post_fsuse_compare(const void *a, const void *b)
 	return rc;
 }
 
-int cil_post_filecon_context_compare(const void *a, const void *b)
+static int cil_post_filecon_context_compare(const void *a, const void *b)
 {
 	struct cil_filecon *a_filecon = *(struct cil_filecon**)a;
 	struct cil_filecon *b_filecon = *(struct cil_filecon**)b;
 	return context_compare(a_filecon->context, b_filecon->context);
 }
 
-int cil_post_ibpkeycon_context_compare(const void *a, const void *b)
+static int cil_post_ibpkeycon_context_compare(const void *a, const void *b)
 {
 	struct cil_ibpkeycon *a_ibpkeycon = *(struct cil_ibpkeycon **)a;
 	struct cil_ibpkeycon *b_ibpkeycon = *(struct cil_ibpkeycon **)b;
 	return context_compare(a_ibpkeycon->context, b_ibpkeycon->context);
 }
 
-int cil_post_portcon_context_compare(const void *a, const void *b)
+static int cil_post_portcon_context_compare(const void *a, const void *b)
 {
 	struct cil_portcon *a_portcon = *(struct cil_portcon**)a;
 	struct cil_portcon *b_portcon = *(struct cil_portcon**)b;
 	return context_compare(a_portcon->context, b_portcon->context);
 }
 
-int cil_post_genfscon_context_compare(const void *a, const void *b)
+static int cil_post_genfscon_context_compare(const void *a, const void *b)
 {
 	struct cil_genfscon *a_genfscon = *(struct cil_genfscon**)a;
 	struct cil_genfscon *b_genfscon = *(struct cil_genfscon**)b;
 	return context_compare(a_genfscon->context, b_genfscon->context);
 }
 
-int cil_post_netifcon_context_compare(const void *a, const void *b)
+static int cil_post_netifcon_context_compare(const void *a, const void *b)
 {
 	int rc;
 	struct cil_netifcon *a_netifcon = *(struct cil_netifcon**)a;
@@ -492,56 +543,56 @@ int cil_post_netifcon_context_compare(const void *a, const void *b)
 	return context_compare(a_netifcon->packet_context, b_netifcon->packet_context);
 }
 
-int cil_post_ibendportcon_context_compare(const void *a, const void *b)
+static int cil_post_ibendportcon_context_compare(const void *a, const void *b)
 {
 	struct cil_ibendportcon *a_ibendportcon = *(struct cil_ibendportcon **)a;
 	struct cil_ibendportcon *b_ibendportcon = *(struct cil_ibendportcon **)b;
 	return context_compare(a_ibendportcon->context, b_ibendportcon->context);
 }
 
-int cil_post_nodecon_context_compare(const void *a, const void *b)
+static int cil_post_nodecon_context_compare(const void *a, const void *b)
 {
 	struct cil_nodecon *a_nodecon = *(struct cil_nodecon **)a;
 	struct cil_nodecon *b_nodecon = *(struct cil_nodecon **)b;
 	return context_compare(a_nodecon->context, b_nodecon->context);
 }
 
-int cil_post_pirqcon_context_compare(const void *a, const void *b)
+static int cil_post_pirqcon_context_compare(const void *a, const void *b)
 {
 	struct cil_pirqcon *a_pirqcon = *(struct cil_pirqcon**)a;
 	struct cil_pirqcon *b_pirqcon = *(struct cil_pirqcon**)b;
 	return context_compare(a_pirqcon->context, b_pirqcon->context);
 }
 
-int cil_post_iomemcon_context_compare(const void *a, const void *b)
+static int cil_post_iomemcon_context_compare(const void *a, const void *b)
 {
 	struct cil_iomemcon *a_iomemcon = *(struct cil_iomemcon**)a;
 	struct cil_iomemcon *b_iomemcon = *(struct cil_iomemcon**)b;
 	return context_compare(a_iomemcon->context, b_iomemcon->context);
 }
 
-int cil_post_ioportcon_context_compare(const void *a, const void *b)
+static int cil_post_ioportcon_context_compare(const void *a, const void *b)
 {
 	struct cil_ioportcon *a_ioportcon = *(struct cil_ioportcon**)a;
 	struct cil_ioportcon *b_ioportcon = *(struct cil_ioportcon**)b;
 	return context_compare(a_ioportcon->context, b_ioportcon->context);
 }
 
-int cil_post_pcidevicecon_context_compare(const void *a, const void *b)
+static int cil_post_pcidevicecon_context_compare(const void *a, const void *b)
 {
 	struct cil_pcidevicecon *a_pcidevicecon = *(struct cil_pcidevicecon**)a;
 	struct cil_pcidevicecon *b_pcidevicecon = *(struct cil_pcidevicecon**)b;
 	return context_compare(a_pcidevicecon->context, b_pcidevicecon->context);
 }
 
-int cil_post_devicetreecon_context_compare(const void *a, const void *b)
+static int cil_post_devicetreecon_context_compare(const void *a, const void *b)
 {
 	struct cil_devicetreecon *a_devicetreecon = *(struct cil_devicetreecon**)a;
 	struct cil_devicetreecon *b_devicetreecon = *(struct cil_devicetreecon**)b;
 	return context_compare(a_devicetreecon->context, b_devicetreecon->context);
 }
 
-int cil_post_fsuse_context_compare(const void *a, const void *b)
+static int cil_post_fsuse_context_compare(const void *a, const void *b)
 {
 	struct cil_fsuse *a_fsuse = *(struct cil_fsuse**)a;
 	struct cil_fsuse *b_fsuse = *(struct cil_fsuse**)b;
@@ -1177,10 +1228,9 @@ static int __cil_cat_expr_range_to_bitmap_helper(struct cil_list_item *i1, struc
 	struct cil_tree_node *n2 = d2->nodes->head->data;
 	struct cil_cat *c1 = (struct cil_cat *)d1;
 	struct cil_cat *c2 = (struct cil_cat *)d2;
-	int i;
 
 	if (n1->flavor == CIL_CATSET || n2->flavor == CIL_CATSET) {
-		cil_log(CIL_ERR, "Category sets cannont be used in a category range\n");
+		cil_log(CIL_ERR, "Category sets cannot be used in a category range\n");
 		goto exit;
 	}
 
@@ -1199,12 +1249,10 @@ static int __cil_cat_expr_range_to_bitmap_helper(struct cil_list_item *i1, struc
 		goto exit;
 	}
 
-	for (i = c1->value; i <= c2->value; i++) {
-		if (ebitmap_set_bit(bitmap, i, 1)) {
-			cil_log(CIL_ERR, "Failed to set cat bit\n");
-			ebitmap_destroy(bitmap);
-			goto exit;
-		}
+	if (ebitmap_init_range(bitmap, c1->value, c2->value)) {
+		cil_log(CIL_ERR, "Failed to set cat bit\n");
+		ebitmap_destroy(bitmap);
+		goto exit;
 	}
 
 	return SEPOL_OK;
@@ -1220,7 +1268,6 @@ static int __cil_permissionx_expr_range_to_bitmap_helper(struct cil_list_item *i
 	char *p2 = i2->data;
 	uint16_t v1;
 	uint16_t v2;
-	uint32_t i;
 
 	rc = __cil_permx_str_to_int(p1, &v1);
 	if (rc != SEPOL_OK) {
@@ -1232,12 +1279,10 @@ static int __cil_permissionx_expr_range_to_bitmap_helper(struct cil_list_item *i
 		goto exit;
 	}
 
-	for (i = v1; i <= v2; i++) {
-		if (ebitmap_set_bit(bitmap, i, 1)) {
-			cil_log(CIL_ERR, "Failed to set permissionx bit\n");
-			ebitmap_destroy(bitmap);
-			goto exit;
-		}
+	if (ebitmap_init_range(bitmap, v1, v2)) {
+		cil_log(CIL_ERR, "Failed to set permissionx bits\n");
+		ebitmap_destroy(bitmap);
+		goto exit;
 	}
 
 	return SEPOL_OK;
@@ -1300,13 +1345,13 @@ static int __cil_expr_to_bitmap(struct cil_list *expr, ebitmap_t *out, int max, 
 	curr = expr->head;
 	flavor = expr->flavor;
 
+	ebitmap_init(&tmp);
+
 	if (curr->flavor == CIL_OP) {
-		enum cil_flavor op = (enum cil_flavor)curr->data;
+		enum cil_flavor op = (enum cil_flavor)(uintptr_t)curr->data;
 
 		if (op == CIL_ALL) {
-			ebitmap_init(&b1); /* all zeros */
-			rc = ebitmap_not(&tmp, &b1, max);
-			ebitmap_destroy(&b1);
+			rc = ebitmap_init_range(&tmp, 0, max - 1);
 			if (rc != SEPOL_OK) {
 				cil_log(CIL_INFO, "Failed to expand 'all' operator\n");
 				ebitmap_destroy(&tmp);
@@ -1314,19 +1359,15 @@ static int __cil_expr_to_bitmap(struct cil_list *expr, ebitmap_t *out, int max, 
 			}
 		} else if (op == CIL_RANGE) {
 			if (flavor == CIL_CAT) {
-				ebitmap_init(&tmp);
 				rc = __cil_cat_expr_range_to_bitmap_helper(curr->next, curr->next->next, &tmp);
 				if (rc != SEPOL_OK) {
 					cil_log(CIL_INFO, "Failed to expand category range\n");
-					ebitmap_destroy(&tmp);
 					goto exit;
 				}
 			} else if (flavor == CIL_PERMISSIONX) {
-				ebitmap_init(&tmp);
 				rc = __cil_permissionx_expr_range_to_bitmap_helper(curr->next, curr->next->next, &tmp);
 				if (rc != SEPOL_OK) {
 					cil_log(CIL_INFO, "Failed to expand category range\n");
-					ebitmap_destroy(&tmp);
 					goto exit;
 				}
 			} else {
@@ -1479,6 +1520,10 @@ static int cil_typeattribute_used(struct cil_typeattribute *attr, struct cil_db 
 static void __mark_neverallow_attrs(struct cil_list *expr_list)
 {
 	struct cil_list_item *curr;
+
+	if (!expr_list) {
+		return;
+	}
 
 	cil_list_for_each(curr, expr_list) {
 		if (curr->flavor == CIL_DATUM) {
@@ -2123,6 +2168,10 @@ static int __evaluate_classperms_list(struct cil_list *classperms, struct cil_db
 				}
 			} else { /* MAP */
 				struct cil_list_item *i = NULL;
+				rc = __evaluate_classperms(cp, db);
+				if (rc != SEPOL_OK) {
+					goto exit;
+				}
 				cil_list_for_each(i, cp->perms) {
 					struct cil_perm *cmp = i->data;
 					rc = __evaluate_classperms_list(cmp->classperms, db);
@@ -2216,6 +2265,14 @@ static int __cil_post_db_classperms_helper(struct cil_tree_node *node, uint32_t 
 		}
 		break;
 	}
+	case CIL_DENY_RULE: {
+		struct cil_deny_rule *deny = node->data;
+		rc = __evaluate_classperms_list(deny->classperms, db);
+		if (rc != SEPOL_OK) {
+			goto exit;
+		}
+		break;
+	}
 	case CIL_CONSTRAIN:
 	case CIL_MLSCONSTRAIN: {
 		struct cil_constrain *constrain = node->data;
@@ -2258,8 +2315,10 @@ static int __cil_post_report_conflict(struct cil_tree_node *node, uint32_t *fini
 static int __cil_post_process_context_rules(struct cil_sort *sort, int (*compar)(const void *, const void *), int (*concompar)(const void *, const void *), struct cil_db *db, enum cil_flavor flavor, const char *flavor_str)
 {
 	uint32_t count = sort->count;
-	uint32_t i, j = 0, removed = 0;
+	uint32_t i = 0, j, removed = 0;
+	int conflicting = 0;
 	int rc = SEPOL_OK;
+	enum cil_log_level log_level = cil_get_log_level();
 
 	if (count < 2) {
 		return SEPOL_OK;
@@ -2267,36 +2326,43 @@ static int __cil_post_process_context_rules(struct cil_sort *sort, int (*compar)
 
 	qsort(sort->array, sort->count, sizeof(sort->array), compar);
 
-	for (i=1; i<count; i++) {
+	for (j=1; j<count; j++) {
 		if (compar(&sort->array[i], &sort->array[j]) != 0) {
-			j++;
+			i++;
+			if (conflicting >= 4) {
+				/* 2 rules were written when conflicting == 1 */
+				cil_log(CIL_WARN, "  Only first 4 of %d conflicting rules shown\n", conflicting);
+			}
+			conflicting = 0;
 		} else {
 			removed++;
-			if (!db->multiple_decls ||
-			   concompar(&sort->array[i], &sort->array[j]) != 0) {
-				struct cil_list_item li;
-				int rc2;
-				cil_log(CIL_WARN, "Found conflicting %s rules\n",
-					flavor_str);
+			if (!db->multiple_decls || concompar(&sort->array[i], &sort->array[j]) != 0) {
 				rc = SEPOL_ERR;
-				li.flavor = flavor;
-				li.data = sort->array[i];
-				rc2 = cil_tree_walk(db->ast->root,
-						    __cil_post_report_conflict,
-						    NULL, NULL, &li);
-				if (rc2 != SEPOL_OK) goto exit;
-				li.data = sort->array[j];
-				rc2 = cil_tree_walk(db->ast->root,
-						    __cil_post_report_conflict,
-						    NULL, NULL, &li);
-				if (rc2 != SEPOL_OK) goto exit;
+				conflicting++;
+				if (log_level >= CIL_WARN) {
+					struct cil_list_item li;
+					int rc2;
+					li.flavor = flavor;
+					if (conflicting == 1) {
+						cil_log(CIL_WARN, "Found conflicting %s rules\n", flavor_str);
+						li.data = sort->array[i];
+						rc2 = cil_tree_walk(db->ast->root, __cil_post_report_conflict,
+											NULL, NULL, &li);
+						if (rc2 != SEPOL_OK) goto exit;
+					}
+					if (conflicting < 4 || log_level > CIL_WARN) {
+						li.data = sort->array[j];
+						rc2 = cil_tree_walk(db->ast->root, __cil_post_report_conflict,
+											NULL, NULL, &li);
+						if (rc2 != SEPOL_OK) goto exit;
+					}
+				}
 			}
 		}
-		if (i != j) {
-			sort->array[j] = sort->array[i];
+		if (i != j && !conflicting) {
+			sort->array[i] = sort->array[j];
 		}
 	}
-
 	sort->count = count - removed;
 
 exit:
@@ -2400,6 +2466,12 @@ static int cil_post_db(struct cil_db *db)
 	rc = __cil_post_process_context_rules(db->filecon, cil_post_filecon_compare, cil_post_filecon_context_compare, db, CIL_FILECON, CIL_KEY_FILECON);
 	if (rc != SEPOL_OK) {
 		cil_log(CIL_ERR, "Problems processing filecon rules\n");
+		goto exit;
+	}
+
+	rc = __cil_post_process_context_rules(db->pirqcon, cil_post_pirqcon_compare, cil_post_pirqcon_context_compare, db, CIL_PIRQCON, CIL_KEY_IOMEMCON);
+	if (rc != SEPOL_OK) {
+		cil_log(CIL_ERR, "Problems processing pirqcon rules\n");
 		goto exit;
 	}
 
@@ -2523,6 +2595,12 @@ int cil_post_process(struct cil_db *db)
 	rc = cil_post_db(db);
 	if (rc != SEPOL_OK) {
 		cil_log(CIL_ERR, "Failed post db handling\n");
+		goto exit;
+	}
+
+	rc = cil_process_deny_rules_in_ast(db);
+	if (rc != SEPOL_OK) {
+		cil_log(CIL_ERR, "Failed to process deny rules\n");
 		goto exit;
 	}
 

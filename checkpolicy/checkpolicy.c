@@ -1,6 +1,6 @@
 
 /*
- * Author : Stephen Smalley, <sds@tycho.nsa.gov>
+ * Author : Stephen Smalley, <stephen.smalley.work@gmail.com>
  */
 
 /*
@@ -89,11 +89,7 @@
 #include <sepol/policydb/link.h>
 
 #include "queue.h"
-#include "checkpolicy.h"
 #include "parse_util.h"
-
-extern char *optarg;
-extern int optind;
 
 static policydb_t policydb;
 static sidtab_t sidtab;
@@ -106,24 +102,25 @@ static int handle_unknown = SEPOL_DENY_UNKNOWN;
 static const char *txtfile = "policy.conf";
 static const char *binfile = "policy";
 
-unsigned int policyvers = POLICYDB_VERSION_MAX;
-
 static __attribute__((__noreturn__)) void usage(const char *progname)
 {
 	printf
 	    ("usage:  %s [-b[F]] [-C] [-d] [-U handle_unknown (allow,deny,reject)] [-M] "
-	     "[-c policyvers (%d-%d)] [-o output_file|-] [-S] "
-	     "[-t target_platform (selinux,xen)] [-E] [-V] [input_file]\n",
+	     "[-N] [-c policyvers (%d-%d)] [-o output_file|-] [-S] [-O] "
+	     "[-t target_platform (selinux,xen)] [-E] [-V] [-L] [input_file]\n",
 	     progname, POLICYDB_VERSION_MIN, POLICYDB_VERSION_MAX);
 	exit(1);
 }
 
 #define FGETS(out, size, in) \
-if (fgets(out,size,in)==NULL) {	\
-		fprintf(stderr, "fgets failed at line %d: %s\n", __LINE__,\
-				strerror(errno)); \
-			exit(1);\
-}
+do { \
+	if (fgets(out,size,in)==NULL) {	\
+		fprintf(stderr, "fgets failed at line %d: %s\n", __LINE__, \
+			strerror(errno)); \
+		exit(1);\
+	} \
+} while (0)
+
 static int print_sid(sepol_security_id_t sid,
 		     context_struct_t * context
 		     __attribute__ ((unused)), void *data
@@ -294,9 +291,7 @@ static int identify_equiv_types(void)
 }
 #endif
 
-extern char *av_to_string(uint32_t tclass, sepol_access_vector_t av);
-
-int display_bools(void)
+static int display_bools(void)
 {
 	uint32_t i;
 
@@ -307,15 +302,15 @@ int display_bools(void)
 	return 0;
 }
 
-void display_expr(cond_expr_t * exp)
+static void display_expr(const cond_expr_t * exp)
 {
 
-	cond_expr_t *cur;
+	const cond_expr_t *cur;
 	for (cur = exp; cur != NULL; cur = cur->next) {
 		switch (cur->expr_type) {
 		case COND_BOOL:
 			printf("%s ",
-			       policydbp->p_bool_val_to_name[cur->bool - 1]);
+			       policydbp->p_bool_val_to_name[cur->boolean - 1]);
 			break;
 		case COND_NOT:
 			printf("! ");
@@ -342,9 +337,9 @@ void display_expr(cond_expr_t * exp)
 	}
 }
 
-int display_cond_expressions(void)
+static int display_cond_expressions(void)
 {
-	cond_node_t *cur;
+	const cond_node_t *cur;
 
 	for (cur = policydbp->cond_list; cur != NULL; cur = cur->next) {
 		printf("expression: ");
@@ -354,16 +349,16 @@ int display_cond_expressions(void)
 	return 0;
 }
 
-int change_bool(char *name, int state)
+static int change_bool(const char *name, int state)
 {
-	cond_bool_datum_t *bool;
+	cond_bool_datum_t *boolean;
 
-	bool = hashtab_search(policydbp->p_bools.table, name);
-	if (bool == NULL) {
+	boolean = hashtab_search(policydbp->p_bools.table, name);
+	if (boolean == NULL) {
 		printf("Could not find bool %s\n", name);
 		return -1;
 	}
-	bool->state = state;
+	boolean->state = state;
 	evaluate_conds(policydbp);
 	return 0;
 }
@@ -372,10 +367,9 @@ static int check_level(hashtab_key_t key, hashtab_datum_t datum, void *arg __att
 {
 	level_datum_t *levdatum = (level_datum_t *) datum;
 
-	if (!levdatum->isalias && !levdatum->defined) {
-		fprintf(stderr,
-			"Error:  sensitivity %s was not used in a level definition!\n",
-			key);
+	if (!levdatum->isalias && levdatum->notdefined) {
+		fprintf(stderr, "Error:  sensitivity %s was not used in a level definition!\n",
+				key);
 		return -1;
 	}
 	return 0;
@@ -395,9 +389,11 @@ int main(int argc, char **argv)
 	size_t scontext_len, pathlen;
 	unsigned int i;
 	unsigned int protocol, port;
-	unsigned int binary = 0, debug = 0, sort = 0, cil = 0, conf = 0, optimize = 0;
+	unsigned int binary = 0, debug = 0, sort = 0, cil = 0, conf = 0, optimize = 0, disable_neverallow = 0;
+	unsigned int line_marker_for_allow = 0;
 	struct val_to_name v;
 	int ret, ch, fd, target = SEPOL_TARGET_SELINUX;
+	unsigned int policyvers = 0;
 	unsigned int nel, uret;
 	struct stat sb;
 	void *map;
@@ -409,7 +405,7 @@ int main(int argc, char **argv)
 	unsigned int reason;
 	int flags;
 	struct policy_file pf;
-	struct option long_options[] = {
+	const struct option long_options[] = {
 		{"output", required_argument, NULL, 'o'},
 		{"target", required_argument, NULL, 't'},
 		{"binary", no_argument, NULL, 'b'},
@@ -417,16 +413,18 @@ int main(int argc, char **argv)
 		{"version", no_argument, NULL, 'V'},
 		{"handle-unknown", required_argument, NULL, 'U'},
 		{"mls", no_argument, NULL, 'M'},
+		{"disable-neverallow", no_argument, NULL, 'N'},
 		{"cil", no_argument, NULL, 'C'},
 		{"conf",no_argument, NULL, 'F'},
 		{"sort", no_argument, NULL, 'S'},
 		{"optimize", no_argument, NULL, 'O'},
 		{"werror", no_argument, NULL, 'E'},
+		{"line-marker-for-allow", no_argument, NULL, 'L'},
 		{"help", no_argument, NULL, 'h'},
 		{NULL, 0, NULL, 0}
 	};
 
-	while ((ch = getopt_long(argc, argv, "o:t:dbU:MCFSVc:OEh", long_options, NULL)) != -1) {
+	while ((ch = getopt_long(argc, argv, "o:t:dbU:MNCFSVc:OELh", long_options, NULL)) != -1) {
 		switch (ch) {
 		case 'o':
 			outfile = optarg;
@@ -475,6 +473,9 @@ int main(int argc, char **argv)
 		case 'M':
 			mlspol = 1;
 			break;
+		case 'N':
+			disable_neverallow = 1;
+			break;
 		case 'C':
 			cil = 1;
 			break;
@@ -501,13 +502,15 @@ int main(int argc, char **argv)
 					usage(argv[0]);
 					exit(1);
 				}
-				if (policyvers != n)
-					policyvers = n;
+				policyvers = n;
 				break;
 			}
 		case 'E':
 			 werror = 1;
 			 break;
+		case 'L':
+			line_marker_for_allow = 1;
+			break;
 		case 'h':
 		default:
 			usage(argv[0]);
@@ -515,7 +518,8 @@ int main(int argc, char **argv)
 	}
 
 	if (show_version) {
-		printf("%d (compatibility range %d-%d)\n", policyvers,
+		printf("%d (compatibility range %d-%d)\n",
+			   policyvers ? policyvers : POLICYDB_VERSION_MAX ,
 		       POLICYDB_VERSION_MAX, POLICYDB_VERSION_MIN);
 		exit(0);
 	}
@@ -533,6 +537,11 @@ int main(int argc, char **argv)
 
 	if (cil && conf) {
 		fprintf(stderr, "Can't convert to CIL and policy.conf at the same time\n");
+		exit(1);
+	}
+
+	if (line_marker_for_allow && !cil) {
+		fprintf(stderr, "Must convert to CIL for line markers to be printed\n");
 		exit(1);
 	}
 
@@ -588,6 +597,16 @@ int main(int argc, char **argv)
 				exit(1);
 			}
 		}
+
+		if (policydbp->policyvers <= POLICYDB_VERSION_PERMISSIVE) {
+			if (policyvers > policydbp->policyvers) {
+				fprintf(stderr, "Binary policies with version <= %u cannot be upgraded\n", POLICYDB_VERSION_PERMISSIVE);
+			} else if (policyvers) {
+				policydbp->policyvers = policyvers;
+			}
+		} else {
+			policydbp->policyvers = policyvers ? policyvers : POLICYDB_VERSION_MAX;
+		}
 	} else {
 		if (conf) {
 			fprintf(stderr, "Can only generate policy.conf from binary policy\n");
@@ -602,6 +621,7 @@ int main(int argc, char **argv)
 		/* Let sepol know if we are dealing with MLS support */
 		parse_policy.mls = mlspol;
 		parse_policy.handle_unknown = handle_unknown;
+		parse_policy.policyvers = policyvers ? policyvers : POLICYDB_VERSION_MAX;
 
 		policydbp = &parse_policy;
 
@@ -622,10 +642,11 @@ int main(int argc, char **argv)
 				fprintf(stderr, "%s:  policydb_init failed\n", argv[0]);
 				exit(1);
 			}
-			if (expand_module(NULL, policydbp, &policydb, 0, 1)) {
+			if (expand_module(NULL, policydbp, &policydb, /*verbose=*/0, !disable_neverallow)) {
 				fprintf(stderr, "Error while expanding policy\n");
 				exit(1);
 			}
+			policydb.policyvers = policyvers ? policyvers : POLICYDB_VERSION_MAX;
 			policydb_destroy(policydbp);
 			policydbp = &policydb;
 		}
@@ -654,8 +675,6 @@ int main(int argc, char **argv)
 			}
 		}
 
-		policydb.policyvers = policyvers;
-
 		if (!cil) {
 			if (!conf) {
 				policydb.policy_type = POLICY_KERN;
@@ -681,6 +700,9 @@ int main(int argc, char **argv)
 				exit(1);
 			}
 		} else {
+			if (line_marker_for_allow) {
+				policydbp->line_marker_avrules |= AVRULE_ALLOWED | AVRULE_XPERMS_ALLOWED;
+			}
 			if (binary) {
 				ret = sepol_kernel_policydb_to_cil(outfp, policydbp);
 			} else {
@@ -693,7 +715,10 @@ int main(int argc, char **argv)
 		}
 
 		if (outfp != stdout) {
-			fclose(outfp);
+			if(fclose(outfp)) {
+				fprintf(stderr, "%s:  error closing %s:  %s\n", argv[0], outfile, strerror(errno));
+				exit(1);
+			}
 		}
 	} else if (cil) {
 		fprintf(stderr, "%s:  No file to write CIL was specified\n", argv[0]);
@@ -783,7 +808,7 @@ int main(int argc, char **argv)
 			case 0:
 				printf("\nallowed {");
 				for (i = 1; i <= sizeof(avd.allowed) * 8; i++) {
-					if (avd.allowed & (1 << (i - 1))) {
+					if (avd.allowed & (UINT32_C(1) << (i - 1))) {
 						v.val = i;
 						ret =
 						    hashtab_map(cladatum->
@@ -957,8 +982,12 @@ int main(int argc, char **argv)
 			printf("fs kdevname?  ");
 			FGETS(ans, sizeof(ans), stdin);
 			ans[strlen(ans) - 1] = 0;
-			sepol_fs_sid(ans, &ssid, &tsid);
-			printf("fs_sid %d default_file_sid %d\n", ssid, tsid);
+			ret = sepol_fs_sid(ans, &ssid, &tsid);
+			if (ret) {
+				printf("unknown fs kdevname\n");
+			} else {
+				printf("fs_sid %d default_file_sid %d\n", ssid, tsid);
+			}
 			break;
 		case '9':
 			printf("protocol?  ");
@@ -986,8 +1015,12 @@ int main(int argc, char **argv)
 			printf("netif name?  ");
 			FGETS(ans, sizeof(ans), stdin);
 			ans[strlen(ans) - 1] = 0;
-			sepol_netif_sid(ans, &ssid, &tsid);
-			printf("if_sid %d default_msg_sid %d\n", ssid, tsid);
+			ret = sepol_netif_sid(ans, &ssid, &tsid);
+			if (ret) {
+				printf("unknown name\n");
+			} else {
+				printf("if_sid %d default_msg_sid %d\n", ssid, tsid);
+			}
 			break;
 		case 'b':{
 				char *p;
@@ -1129,12 +1162,11 @@ int main(int argc, char **argv)
 			FGETS(ans, sizeof(ans), stdin);
 			ans[strlen(ans) - 1] = 0;
 
-			name = malloc((strlen(ans) + 1) * sizeof(char));
+			name = strdup(ans);
 			if (name == NULL) {
-				fprintf(stderr, "couldn't malloc string.\n");
+				fprintf(stderr, "couldn't strdup string.\n");
 				break;
 			}
-			strcpy(name, ans);
 
 			printf("state? ");
 			FGETS(ans, sizeof(ans), stdin);
@@ -1166,8 +1198,6 @@ int main(int argc, char **argv)
 					printf("\nNo such class.\n");
 					break;
 				}
-				cladatum =
-				    policydb.class_val_to_struct[tclass - 1];
 			} else {
 				ans[strlen(ans) - 1] = 0;
 				cladatum =
@@ -1219,8 +1249,6 @@ int main(int argc, char **argv)
 					printf("\nNo such class.\n");
 					break;
 				}
-				cladatum =
-				    policydb.class_val_to_struct[tclass - 1];
 			} else {
 				ans[strlen(ans) - 1] = 0;
 				cladatum =
@@ -1281,12 +1309,11 @@ int main(int argc, char **argv)
 			FGETS(ans, sizeof(ans), stdin);
 			ans[strlen(ans) - 1] = 0;
 
-			name = malloc((strlen(ans) + 1) * sizeof(char));
+			name = strdup(ans);
 			if (!name) {
-				fprintf(stderr, "couldn't malloc string.\n");
+				fprintf(stderr, "couldn't strdup string.\n");
 				break;
 			}
-			strcpy(name, ans);
 
 			printf("port? ");
 			FGETS(ans, sizeof(ans), stdin);

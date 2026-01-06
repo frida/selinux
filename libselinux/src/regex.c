@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <endian.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -18,7 +19,6 @@
 
 /* If the compiler doesn't define __BYTE_ORDER__, try to use the C
  * library <endian.h> header definitions. */
-#include <endian.h>
 #ifndef __BYTE_ORDER
 #error Neither __BYTE_ORDER__ nor __BYTE_ORDER defined. Unable to determine endianness.
 #endif
@@ -30,41 +30,49 @@
 #endif
 
 #ifdef USE_PCRE2
-char const *regex_arch_string(void)
+static pthread_once_t once = PTHREAD_ONCE_INIT;
+static char arch_string_buffer[32];
+
+static void regex_arch_string_init(void)
 {
-	static char arch_string_buffer[32];
-	static char const *arch_string = "";
-	char const *endianness = NULL;
+	char const *endianness;
 	int rc;
 
-	if (arch_string[0] == '\0') {
-		if (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
-			endianness = "el";
-		else if (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
-			endianness = "eb";
-
-		if (!endianness)
-			return NULL;
-
-		rc = snprintf(arch_string_buffer, sizeof(arch_string_buffer),
-				"%zu-%zu-%s", sizeof(void *),
-				sizeof(REGEX_ARCH_SIZE_T),
-				endianness);
-		if (rc < 0)
-			abort();
-
-		arch_string = &arch_string_buffer[0];
+	if (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+		endianness = "el";
+	else if (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
+		endianness = "eb";
+	else {
+		arch_string_buffer[0] = '\0';
+		return;
 	}
-	return arch_string;
+
+	rc = snprintf(arch_string_buffer, sizeof(arch_string_buffer),
+			"%zu-%zu-%s", sizeof(void *),
+			sizeof(REGEX_ARCH_SIZE_T),
+			endianness);
+	if (rc < 0 || (size_t)rc >= sizeof(arch_string_buffer)) {
+		arch_string_buffer[0] = '\0';
+		return;
+	}
+}
+
+const char *regex_arch_string(void)
+{
+	__selinux_once(once, regex_arch_string_init);
+
+	return arch_string_buffer[0] != '\0' ? arch_string_buffer : NULL;
 }
 
 struct regex_data {
 	pcre2_code *regex; /* compiled regular expression */
+#ifndef AGGRESSIVE_FREE_AFTER_REGEX_MATCH
 	/*
 	 * match data block required for the compiled
 	 * pattern in pcre2
 	 */
 	pcre2_match_data *match_data;
+#endif
 	pthread_mutex_t match_mutex;
 };
 
@@ -84,11 +92,13 @@ int regex_prepare_data(struct regex_data **regex, char const *pattern_string,
 		goto err;
 	}
 
+#ifndef AGGRESSIVE_FREE_AFTER_REGEX_MATCH
 	(*regex)->match_data =
 	    pcre2_match_data_create_from_pattern((*regex)->regex, NULL);
 	if (!(*regex)->match_data) {
 		goto err;
 	}
+#endif
 	return 0;
 
 err:
@@ -112,12 +122,14 @@ int regex_load_mmap(struct mmap_area *mmap_area, struct regex_data **regex,
 		    int do_load_precompregex, bool *regex_compiled)
 {
 	int rc;
-	uint32_t entry_len;
+	uint32_t data_u32, entry_len;
 
 	*regex_compiled = false;
-	rc = next_entry(&entry_len, mmap_area, sizeof(uint32_t));
+	rc = next_entry(&data_u32, mmap_area, sizeof(uint32_t));
 	if (rc < 0)
 		return -1;
+
+	entry_len = be32toh(data_u32);
 
 	if (entry_len && do_load_precompregex) {
 		/*
@@ -138,10 +150,12 @@ int regex_load_mmap(struct mmap_area *mmap_area, struct regex_data **regex,
 		if (rc != 1)
 			goto err;
 
+#ifndef AGGRESSIVE_FREE_AFTER_REGEX_MATCH
 		(*regex)->match_data =
 		    pcre2_match_data_create_from_pattern((*regex)->regex, NULL);
 		if (!(*regex)->match_data)
 			goto err;
+#endif
 
 		*regex_compiled = true;
 	}
@@ -163,22 +177,23 @@ int regex_writef(struct regex_data *regex, FILE *fp, int do_write_precompregex)
 	int rc = 0;
 	size_t len;
 	PCRE2_SIZE serialized_size;
-	uint32_t to_write = 0;
+	uint32_t to_write = 0, data_u32;
 	PCRE2_UCHAR *bytes = NULL;
 
 	if (do_write_precompregex) {
-		/* encode the patter for serialization */
+		/* encode the pattern for serialization */
 		rc = pcre2_serialize_encode((const pcre2_code **)&regex->regex,
 					    1, &bytes, &serialized_size, NULL);
-		if (rc != 1) {
-			rc = -1;
+		if (rc != 1 || serialized_size >= UINT32_MAX) {
+			rc = -3;
 			goto out;
 		}
 		to_write = serialized_size;
 	}
 
 	/* write serialized pattern's size */
-	len = fwrite(&to_write, sizeof(uint32_t), 1, fp);
+	data_u32 = htobe32(to_write);
+	len = fwrite(&data_u32, sizeof(uint32_t), 1, fp);
 	if (len != 1) {
 		rc = -1;
 		goto out;
@@ -203,8 +218,12 @@ void regex_data_free(struct regex_data *regex)
 	if (regex) {
 		if (regex->regex)
 			pcre2_code_free(regex->regex);
+
+#ifndef AGGRESSIVE_FREE_AFTER_REGEX_MATCH
 		if (regex->match_data)
 			pcre2_match_data_free(regex->match_data);
+#endif
+
 		__pthread_mutex_destroy(&regex->match_mutex);
 		free(regex);
 	}
@@ -213,10 +232,30 @@ void regex_data_free(struct regex_data *regex)
 int regex_match(struct regex_data *regex, char const *subject, int partial)
 {
 	int rc;
+	pcre2_match_data *match_data;
 	__pthread_mutex_lock(&regex->match_mutex);
+
+#ifdef AGGRESSIVE_FREE_AFTER_REGEX_MATCH
+	match_data = pcre2_match_data_create_from_pattern(
+	    regex->regex, NULL);
+	if (match_data == NULL) {
+		__pthread_mutex_unlock(&regex->match_mutex);
+		return REGEX_ERROR;
+	}
+#else
+	match_data = regex->match_data;
+#endif
+
 	rc = pcre2_match(
 	    regex->regex, (PCRE2_SPTR)subject, PCRE2_ZERO_TERMINATED, 0,
-	    partial ? PCRE2_PARTIAL_SOFT : 0, regex->match_data, NULL);
+	    partial ? PCRE2_PARTIAL_SOFT : 0, match_data, NULL);
+
+#ifdef AGGRESSIVE_FREE_AFTER_REGEX_MATCH
+	// pcre2_match allocates heap and it won't be freed until
+	// pcre2_match_data_free, resulting in heap overhead.
+	pcre2_match_data_free(match_data);
+#endif
+
 	__pthread_mutex_unlock(&regex->match_mutex);
 	if (rc > 0)
 		return REGEX_MATCH;
@@ -257,6 +296,9 @@ struct regex_data *regex_data_create(void)
 {
 	struct regex_data *regex_data =
 		(struct regex_data *)calloc(1, sizeof(struct regex_data));
+	if (!regex_data)
+		return NULL;
+
 	__pthread_mutex_init(&regex_data->match_mutex, NULL);
 	return regex_data;
 }
@@ -319,14 +361,18 @@ char const *regex_version(void)
 }
 
 int regex_load_mmap(struct mmap_area *mmap_area, struct regex_data **regex,
-		    int unused __attribute__((unused)), bool *regex_compiled)
+		    int do_load_precompregex __attribute__((unused)), bool *regex_compiled)
 {
 	int rc;
-	uint32_t entry_len;
+	uint32_t data_u32, entry_len;
 	size_t info_len;
 
-	rc = next_entry(&entry_len, mmap_area, sizeof(uint32_t));
-	if (rc < 0 || !entry_len)
+	rc = next_entry(&data_u32, mmap_area, sizeof(uint32_t));
+	if (rc < 0)
+		return -1;
+
+	entry_len = be32toh(data_u32);
+	if (!entry_len)
 		return -1;
 
 	*regex = regex_data_create();
@@ -347,9 +393,11 @@ int regex_load_mmap(struct mmap_area *mmap_area, struct regex_data **regex,
 	if (rc < 0 || info_len != entry_len)
 		goto err;
 
-	rc = next_entry(&entry_len, mmap_area, sizeof(uint32_t));
+	rc = next_entry(&data_u32, mmap_area, sizeof(uint32_t));
 	if (rc < 0)
 		goto err;
+
+	entry_len = be32toh(data_u32);
 
 	if (entry_len) {
 		(*regex)->lsd.study_data = (void *)mmap_area->next_addr;
@@ -387,49 +435,49 @@ static inline pcre_extra *get_pcre_extra(struct regex_data *regex)
 }
 
 int regex_writef(struct regex_data *regex, FILE *fp,
-		 int unused __attribute__((unused)))
+		 int do_write_precompregex __attribute__((unused)))
 {
 	int rc;
 	size_t len;
-	uint32_t to_write;
+	uint32_t data_u32;
 	size_t size;
 	pcre_extra *sd = get_pcre_extra(regex);
 
 	/* determine the size of the pcre data in bytes */
 	rc = pcre_fullinfo(regex->regex, NULL, PCRE_INFO_SIZE, &size);
-	if (rc < 0)
-		return -1;
+	if (rc < 0 || size >= UINT32_MAX)
+		return -3;
 
 	/* write the number of bytes in the pcre data */
-	to_write = size;
-	len = fwrite(&to_write, sizeof(uint32_t), 1, fp);
+	data_u32 = htobe32(size);
+	len = fwrite(&data_u32, sizeof(uint32_t), 1, fp);
 	if (len != 1)
 		return -1;
 
 	/* write the actual pcre data as a char array */
-	len = fwrite(regex->regex, 1, to_write, fp);
-	if (len != to_write)
+	len = fwrite(regex->regex, 1, size, fp);
+	if (len != size)
 		return -1;
 
 	if (sd) {
 		/* determine the size of the pcre study info */
 		rc =
 		    pcre_fullinfo(regex->regex, sd, PCRE_INFO_STUDYSIZE, &size);
-		if (rc < 0)
-			return -1;
+		if (rc < 0 || size >= UINT32_MAX)
+			return -3;
 	} else
 		size = 0;
 
 	/* write the number of bytes in the pcre study data */
-	to_write = size;
-	len = fwrite(&to_write, sizeof(uint32_t), 1, fp);
+	data_u32 = htobe32(size);
+	len = fwrite(&data_u32, sizeof(uint32_t), 1, fp);
 	if (len != 1)
 		return -1;
 
 	if (sd) {
 		/* write the actual pcre study data as a char array */
-		len = fwrite(sd->study_data, 1, to_write, fp);
-		if (len != to_write)
+		len = fwrite(sd->study_data, 1, size, fp);
+		if (len != size)
 			return -1;
 	}
 

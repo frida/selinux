@@ -2,6 +2,9 @@
 PREFIX ?= /usr
 SBINDIR ?= $(PREFIX)/sbin
 
+override CFLAGS += -I../../libselinux/include
+override LDFLAGS+= -L../../libselinux/src
+
 TARGETS=transcon untranscon
 
 # If no specific libsepol.a is specified, fall back on LDFLAGS search path
@@ -14,13 +17,13 @@ endif
 all: $(TARGETS)
 
 transcon: transcon.o ../src/mcstrans.o ../src/mls_level.o $(LIBSEPOLA)
-	$(CC) $(LDFLAGS) -o $@ $^ -lpcre -lselinux $(LDLIBS_LIBSEPOLA)
+	$(CC) $(LDFLAGS) -o $@ $^ $(PCRE_LDLIBS) -lselinux $(LDLIBS_LIBSEPOLA)
 
 untranscon: untranscon.o ../src/mcstrans.o ../src/mls_level.o $(LIBSEPOLA)
-	$(CC) $(LDFLAGS) -o $@ $^ -lpcre -lselinux $(LDLIBS_LIBSEPOLA)
+	$(CC) $(LDFLAGS) -o $@ $^ $(PCRE_LDLIBS) -lselinux $(LDLIBS_LIBSEPOLA)
 
 %.o:  %.c 
-	$(CC) $(CFLAGS) -D_GNU_SOURCE -I../src -fPIE -c -o $@ $<
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(PCRE_CFLAGS) -D_GNU_SOURCE -I../src -fPIE -c -o $@ $<
 
 install: all
 	-mkdir -p $(DESTDIR)$(SBINDIR)
@@ -33,4 +36,3 @@ clean:
 	rm -f $(TARGETS) *.o *~ \#*
 
 relabel:
-

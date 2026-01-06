@@ -18,6 +18,7 @@
  *  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
+#include "test-linker-cond-map.h"
 #include "parse_util.h"
 #include "helpers.h"
 #include "test-common.h"
@@ -50,11 +51,11 @@
  */
 
 typedef struct test_cond_expr {
-	const char *bool;
+	const char *boolean;
 	uint32_t expr_type;
 } test_cond_expr_t;
 
-void test_cond_expr_mapping(policydb_t * p, avrule_decl_t * d, test_cond_expr_t * bools, int len)
+static void test_cond_expr_mapping(policydb_t * p, avrule_decl_t * d, test_cond_expr_t * bools, int len)
 {
 	int i;
 	cond_expr_t *expr;
@@ -68,18 +69,18 @@ void test_cond_expr_mapping(policydb_t * p, avrule_decl_t * d, test_cond_expr_t 
 		CU_ASSERT_FATAL(expr != NULL);
 
 		CU_ASSERT(expr->expr_type == bools[i].expr_type);
-		if (bools[i].bool) {
-			CU_ASSERT(strcmp(p->sym_val_to_name[SYM_BOOLS][expr->bool - 1], bools[i].bool) == 0);
+		if (bools[i].boolean) {
+			CU_ASSERT(strcmp(p->sym_val_to_name[SYM_BOOLS][expr->boolean - 1], bools[i].boolean) == 0);
 		}
 		expr = expr->next;
 	}
 }
 
-void test_bool_state(policydb_t * p, const char *bool, int state)
+static void test_bool_state(policydb_t * p, const char *boolean, int state)
 {
 	cond_bool_datum_t *b;
 
-	b = hashtab_search(p->p_bools.table, bool);
+	b = hashtab_search(p->p_bools.table, boolean);
 	CU_ASSERT_FATAL(b != NULL);
 	CU_ASSERT(b->state == state);
 }
@@ -99,7 +100,7 @@ void base_cond_tests(policydb_t * base)
 	test_sym_presence(base, "g_b_bool_1", SYM_BOOLS, SCOPE_DECL, decls, 1);
 	test_bool_state(base, "g_b_bool_1", 0);
 	/* conditional expression mapped correctly */
-	bools[0].bool = "g_b_bool_1";
+	bools[0].boolean = "g_b_bool_1";
 	bools[0].expr_type = COND_BOOL;
 	test_cond_expr_mapping(base, d, bools, 1);
 
@@ -109,7 +110,7 @@ void base_cond_tests(policydb_t * base)
 	test_sym_presence(base, "o1_b_bool_1", SYM_BOOLS, SCOPE_DECL, decls, 1);
 	test_bool_state(base, "o1_b_bool_1", 1);
 	/* conditional expression mapped correctly */
-	bools[0].bool = "o1_b_bool_1";
+	bools[0].boolean = "o1_b_bool_1";
 	bools[0].expr_type = COND_BOOL;
 	test_cond_expr_mapping(base, d, bools, 1);
 
@@ -127,7 +128,7 @@ void module_cond_tests(policydb_t * base)
 	test_sym_presence(base, "g_m1_bool_1", SYM_BOOLS, SCOPE_DECL, decls, 1);
 	test_bool_state(base, "g_m1_bool_1", 1);
 	/* conditional expression mapped correctly */
-	bools[0].bool = "g_m1_bool_1";
+	bools[0].boolean = "g_m1_bool_1";
 	bools[0].expr_type = COND_BOOL;
 	test_cond_expr_mapping(base, d, bools, 1);
 
@@ -137,7 +138,7 @@ void module_cond_tests(policydb_t * base)
 	test_sym_presence(base, "o1_m1_bool_1", SYM_BOOLS, SCOPE_DECL, decls, 1);
 	test_bool_state(base, "o1_m1_bool_1", 0);
 	/* conditional expression mapped correctly */
-	bools[0].bool = "o1_m1_bool_1";
+	bools[0].boolean = "o1_m1_bool_1";
 	bools[0].expr_type = COND_BOOL;
 	test_cond_expr_mapping(base, d, bools, 1);
 
@@ -149,11 +150,11 @@ void module_cond_tests(policydb_t * base)
 	test_bool_state(base, "g_m2_bool_1", 1);
 	test_bool_state(base, "g_m2_bool_2", 0);
 	/* conditional expression mapped correctly */
-	bools[0].bool = "g_m2_bool_1";
+	bools[0].boolean = "g_m2_bool_1";
 	bools[0].expr_type = COND_BOOL;
-	bools[1].bool = "g_m2_bool_2";
+	bools[1].boolean = "g_m2_bool_2";
 	bools[1].expr_type = COND_BOOL;
-	bools[2].bool = NULL;
+	bools[2].boolean = NULL;
 	bools[2].expr_type = COND_AND;
 	test_cond_expr_mapping(base, d, bools, 3);
 }

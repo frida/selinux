@@ -169,7 +169,7 @@ io_channel_callback
   return TRUE;
 }
 
-int start() {
+int start(void) {
 #ifdef HAVE_DBUS
 	GDBusConnection *bus;
 	GError *err = NULL;
@@ -230,13 +230,16 @@ static int local_server(void) {
 		return -1;
 	}
 	if (flock(local_lock_fd, LOCK_EX | LOCK_NB) < 0) {
-		close(local_lock_fd);
 		if (debug_mode)
 			perror("flock");
+		close(local_lock_fd);
+		local_lock_fd = -1;
 		return -1;
 	}
 	/* watch for stdin/terminal going away */
 	GIOChannel *in = g_io_channel_unix_new(0);
+	g_io_channel_set_encoding(in, NULL, NULL);
+	g_io_channel_set_flags(in, g_io_channel_get_flags(in) | G_IO_FLAG_NONBLOCK, NULL);
 	g_io_add_watch_full( in,
 			     G_PRIORITY_HIGH,
 			     G_IO_IN|G_IO_ERR|G_IO_HUP,
@@ -281,6 +284,8 @@ int server(int master_fd, const char *watch_file) {
 	set_matchpathcon_flags(MATCHPATHCON_NOTRANS);
 
 	GIOChannel *c = g_io_channel_unix_new(master_fd);
+	g_io_channel_set_encoding(c, NULL, NULL);
+	g_io_channel_set_flags(c, g_io_channel_get_flags(c) | G_IO_FLAG_NONBLOCK, NULL);
 
 	g_io_add_watch_full(c,
 			    G_PRIORITY_HIGH,

@@ -148,7 +148,13 @@ static int check_booleans(struct boolean_t **bools)
 		sepol_bool_free(boolean);
 
 	if (fcnt > 0) {
-		*bools = calloc(sizeof(struct boolean_t), fcnt + 1);
+		*bools = calloc(fcnt + 1, sizeof(struct boolean_t));
+		if (!*bools) {
+			PyErr_SetString( PyExc_MemoryError, "Out of memory\n");
+			free(foundlist);
+			return 0;
+		}
+
 		struct boolean_t *b = *bools;
 		for (i = 0; i < fcnt; i++) {
 			int ctr = foundlist[i];
@@ -191,26 +197,17 @@ static PyObject *finish(PyObject *self __attribute__((unused)), PyObject *args) 
 
 static int __policy_init(const char *init_path)
 {
-	FILE *fp;
-	char path[PATH_MAX];
+	FILE *fp = NULL;
+	const char *curpolicy;
 	char errormsg[PATH_MAX+1024+20];
 	struct sepol_policy_file *pf = NULL;
 	int rc;
 	unsigned int cnt;
 
-	path[PATH_MAX-1] = '\0';
 	if (init_path) {
-		strncpy(path, init_path, PATH_MAX-1);
-		fp = fopen(path, "re");
-		if (!fp) {
-			snprintf(errormsg, sizeof(errormsg), 
-				 "unable to open %s:  %s\n",
-				 path, strerror(errno));
-			PyErr_SetString( PyExc_ValueError, errormsg);
-			return 1;
-		}
+		curpolicy = init_path;
 	} else {
-		const char *curpolicy = selinux_current_policy_path();
+		curpolicy = selinux_current_policy_path();
 		if (!curpolicy) {
 			/* SELinux disabled, must use -p option. */
 			snprintf(errormsg, sizeof(errormsg),
@@ -218,18 +215,18 @@ static int __policy_init(const char *init_path)
 			PyErr_SetString( PyExc_ValueError, errormsg);
 			return 1;
 		}
-		fp = fopen(curpolicy, "re");
-		if (!fp) {
-			snprintf(errormsg, sizeof(errormsg), 
-				 "unable to open %s:  %s\n",
-				 curpolicy,
-				 strerror(errno));
-			PyErr_SetString( PyExc_ValueError, errormsg);
-			return 1;
-		}
 	}
 
-	avc = calloc(sizeof(struct avc_t), 1);
+	fp = fopen(curpolicy, "re");
+	if (!fp) {
+		snprintf(errormsg, sizeof(errormsg),
+			 "unable to open %s:  %m\n",
+			 curpolicy);
+		PyErr_SetString( PyExc_ValueError, errormsg);
+		return 1;
+	}
+
+	avc = calloc(1, sizeof(struct avc_t));
 	if (!avc) {
 		PyErr_SetString( PyExc_MemoryError, "Out of memory\n");
 		fclose(fp);
@@ -242,20 +239,19 @@ static int __policy_init(const char *init_path)
 	if (sepol_policy_file_create(&pf) ||
 	    sepol_policydb_create(&avc->policydb)) {
 		snprintf(errormsg, sizeof(errormsg), 
-			 "policydb_init failed: %s\n", strerror(errno));
+			 "policydb_init failed: %m\n");
 		PyErr_SetString( PyExc_RuntimeError, errormsg);
-		fclose(fp);
-		return 1;
+		goto err;
 	}
 	sepol_policy_file_set_fp(pf, fp);	
 	if (sepol_policydb_read(avc->policydb, pf)) {
 		snprintf(errormsg, sizeof(errormsg), 
-			 "invalid binary policy %s\n", path);
+			 "invalid binary policy %s\n", curpolicy);
 		PyErr_SetString( PyExc_ValueError, errormsg);
-		fclose(fp);
-		return 1;
+		goto err;
 	}
 	fclose(fp);
+	fp = NULL;
 	sepol_set_policydb(&avc->policydb->p);
 	avc->handle = sepol_handle_create();
 	/* Turn off messages */
@@ -265,28 +261,43 @@ static int __policy_init(const char *init_path)
 			      avc->policydb, &cnt);
 	if (rc < 0) {
 		PyErr_SetString( PyExc_RuntimeError, "unable to get bool count\n");
-		return 1;
+		goto err;
 	}
 
 	boollist = calloc(cnt, sizeof(*boollist));
 	if (!boollist) {
 		PyErr_SetString( PyExc_MemoryError, "Out of memory\n");
-		return 1;
+		goto err;
 	}
 
 	sepol_bool_iterate(avc->handle, avc->policydb,
-			   load_booleans, (void *)NULL);
+			   load_booleans, NULL);
 
 	/* Initialize the sidtab for subsequent use by sepol_context_to_sid
 	   and sepol_compute_av_reason. */
 	rc = sepol_sidtab_init(&sidtab);
 	if (rc < 0) {
 		PyErr_SetString( PyExc_RuntimeError, "unable to init sidtab\n");
-		free(boollist);
-		return 1;
+		goto err;
 	}
 	sepol_set_sidtab(&sidtab);
 	return 0;
+
+err:
+	if (boollist)
+		free(boollist);
+	if (avc){
+		if (avc->handle)
+			sepol_handle_destroy(avc->handle);
+		if (avc->policydb)
+			sepol_policydb_free(avc->policydb);
+		free(avc);
+	}
+	if (pf)
+		sepol_policy_file_free(pf);
+	if (fp)
+		fclose(fp);
+	return 1;
 }
 
 static PyObject *init(PyObject *self __attribute__((unused)), PyObject *args) {

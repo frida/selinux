@@ -20,7 +20,7 @@ typedef struct dbase_file dbase_t;
 #include "debug.h"
 
 static int node_print(semanage_handle_t * handle,
-		      semanage_node_t * node, FILE * str)
+		      const semanage_node_t * node, FILE * str)
 {
 
 	char *con_str = NULL;
@@ -77,7 +77,7 @@ static int node_parse(semanage_handle_t * handle,
 		goto err;
 
 	/* Protocol */
-	if (parse_fetch_string(handle, info, &str, ' ') < 0)
+	if (parse_fetch_string(handle, info, &str, ' ', 0) < 0)
 		goto err;
 	if (!strcasecmp(str, "ipv4"))
 		proto = SEMANAGE_PROTO_IP4;
@@ -96,7 +96,7 @@ static int node_parse(semanage_handle_t * handle,
 	/* Address */
 	if (parse_assert_space(handle, info) < 0)
 		goto err;
-	if (parse_fetch_string(handle, info, &str, ' ') < 0)
+	if (parse_fetch_string(handle, info, &str, ' ', 0) < 0)
 		goto err;
 	if (semanage_node_set_addr(handle, node, proto, str) < 0)
 		goto err;
@@ -106,7 +106,7 @@ static int node_parse(semanage_handle_t * handle,
 	str = NULL;
 
 	/* Netmask */
-	if (parse_fetch_string(handle, info, &str, ' ') < 0)
+	if (parse_fetch_string(handle, info, &str, ' ', 0) < 0)
 		goto err;
 	if (semanage_node_set_mask(handle, node, proto, str) < 0)
 		goto err;
@@ -116,7 +116,7 @@ static int node_parse(semanage_handle_t * handle,
 	str = NULL;
 
 	/* Port context */
-	if (parse_fetch_string(handle, info, &str, ' ') < 0)
+	if (parse_fetch_string(handle, info, &str, ' ', 0) < 0)
 		goto err;
 	if (semanage_context_from_string(handle, str, &con) < 0) {
 		ERR(handle, "invalid security context \"%s\" (%s: %u)\n%s",
@@ -154,7 +154,7 @@ static int node_parse(semanage_handle_t * handle,
 }
 
 /* NODE RECORD: FILE extension: method table */
-record_file_table_t SEMANAGE_NODE_FILE_RTABLE = {
+static const record_file_table_t SEMANAGE_NODE_FILE_RTABLE = {
 	.parse = node_parse,
 	.print = node_print,
 };

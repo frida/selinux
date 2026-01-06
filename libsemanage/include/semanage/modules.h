@@ -29,7 +29,7 @@
 typedef struct semanage_module_key semanage_module_key_t;
 
 /* High level module management functions. These are all part of
- * a transaction  
+ * a transaction
  */
 
 extern int semanage_module_install(semanage_handle_t *,
@@ -222,7 +222,7 @@ extern int semanage_module_set_enabled(semanage_handle_t *sh,
 
 /* Lookup @modinfo by @modkey. Caller should use
  * semanage_module_info_destroy and free on @modinfo.
- * 
+ *
  * Returns 0 on success and -1 on error.
  */
 extern int semanage_module_get_module_info(semanage_handle_t *sh,
@@ -242,7 +242,7 @@ extern int semanage_module_list_all(semanage_handle_t *sh,
 				    semanage_module_info_t **modinfos,
 				    int *modinfos_len);
 
-/* Install the module indicated by @modinfo with input data from 
+/* Install the module indicated by @modinfo with input data from
  * @module_data with length @data_len.
  *
  * @modinfo must have all values filled in.
@@ -281,5 +281,31 @@ extern int semanage_module_remove_key(semanage_handle_t *sh,
 extern int semanage_module_get_enabled(semanage_handle_t *sh,
 				       const semanage_module_key_t *modkey,
 				       int *enabled);
+
+/* Compute checksum for @modkey module contents.
+ *
+ * If @checksum is NULL, the function will just return the length of the
+ * checksum string in @checksum_len (checksum strings are guaranteed to
+ * have a fixed length for a given libsemanage binary). @modkey and @cil
+ * are ignored in this case and should be set to NULL and 0 (respectively).
+ *
+ * If @checksum is non-NULL, on success, @checksum will point to a buffer
+ * containing the checksum string and @checksum_len will point to the
+ * length of the string (without the null terminator). The semantics of
+ * @cil are the same as for @extract_cil in semanage_module_extract().
+ *
+ * The caller is responsible to free the buffer returned in @checksum (using
+ * free(3)).
+ *
+ * Callers may assume that if the checksum strings for two modules match,
+ * the module content is the same (collisions are theoretically possible,
+ * yet extremely unlikely).
+ *
+ * Returns 0 on success and -1 on error.
+ */
+extern int semanage_module_compute_checksum(semanage_handle_t *sh,
+					    semanage_module_key_t *modkey,
+					    int cil, char **checksum,
+					    size_t *checksum_len);
 
 #endif
