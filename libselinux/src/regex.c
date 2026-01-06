@@ -280,7 +280,7 @@ int regex_match(struct regex_data *regex, char const *subject, int partial)
  */
 int regex_cmp(struct regex_data *regex1, struct regex_data *regex2)
 {
-	int rc;
+	__attribute__((unused)) int rc;
 	size_t len1, len2;
 	rc = pcre2_pattern_info(regex1->regex, PCRE2_INFO_SIZE, &len1);
 	assert(rc == 0);
