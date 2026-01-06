@@ -2035,7 +2035,7 @@ static int is_decl_requires_met(link_state_t *state, const avrule_decl_t *decl,
 		ebitmap_for_each_positive_bit(bitmap, node, j) {
 			struct find_perm_arg fparg;
 			uint32_t perm_value = j + 1;
-			int rc;
+			__attribute__((unused)) int rc;
 
 			fparg.valuep = perm_value;
 			fparg.key = NULL;
