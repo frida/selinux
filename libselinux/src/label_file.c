@@ -1250,8 +1250,14 @@ static char *selabel_apply_subs(const struct selabel_sub *subs, uint32_t num, co
 				if (!dst)
 					return NULL;
 
-				tmp = mempcpy(dst, ptr->dst, ptr->dlen);
-				tmp = mempcpy(tmp, &src[len], slen - len);
+				tmp = dst;
+
+				memcpy(tmp, ptr->dst, ptr->dlen);
+				tmp += ptr->dlen;
+
+				memcpy(tmp, &src[len], slen - len);
+				tmp += (slen - len);
+
 				*tmp = '\0';
 				return dst;
 			}
