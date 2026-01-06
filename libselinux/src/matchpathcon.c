@@ -280,7 +280,7 @@ int matchpathcon_filespec_add(unsigned long ino, int specind,
 {
 	return matchpathcon_filespec_add64(ino, specind, file);
 }
-#elif (defined(_FILE_OFFSET_BITS) && _FILE_OFFSET_BITS == 64) || defined(__INO_T_MATCHES_INO64_T)
+#elif defined(__INO_T_MATCHES_INO64_T) || (defined(__ANDROID__) && defined(__LP64__))
 
 static_assert(sizeof(uint64_t) == sizeof(ino_t), "inode size mismatch");
 
