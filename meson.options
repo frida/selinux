@@ -1,0 +1,5 @@
+option('regex',
+  type: 'feature',
+  value: 'auto',
+  description: 'Include regex support'
+)
