@@ -5,8 +5,16 @@ semanage.conf \- global configuration file for the SELinux Management library
 .PP
 The
 .BR semanage.conf
-file is usually located under the directory /etc/selinux and it is used for run-time configuration of the
-behavior of the SELinux Management library.
+file is used for run-time configuration of the behavior of the SELinux Management library.
+It is searched for under
+.IR /etc/selinux/ ,
+then
+.IR /usr/lib/selinux ;
+the first one found is used.
+This lets a vendor ship a default under
+.I /usr/lib/selinux/semanage.conf
+and an administrator override it under
+.IR /etc .
 
 .PP
 Each line should contain a configuration parameter followed by the equal sign ("=") and then followed by the configuration value for that
@@ -36,6 +44,28 @@ Specify an alternative root path to use for the store. The default is "/"
 Specify an alternative store_root path to use. The default is "/var/lib/selinux"
 
 .TP
+.B ro-store-root
+Specify a colon-separated list of additional, read-only module-store roots to search after
+.B store-root
+when reading, e.g. "/usr/lib/selinux".
+Only the
+.I active
+subtree of a listed root is read; the sandbox, previous store, and lock files always live under
+.BR store-root .
+Module listing is the union across all roots, and a module at the same priority and name under
+.B store-root
+shadows one from a read-only root; installing at that priority overrides the vendor module and removing the local copy un-shadows it.
+.B semodule \-r
+on a module that exists only in a read-only root is refused (use
+.B \-d
+to disable it), as is
+.B semodule \-e
+on a module that a read-only root marks disabled.
+Unset by default, in which case only
+.B store-root
+is searched and behavior is unchanged.
+
+.TP
 .B compiler-directory
 Specify an alternative directory that contains HLL to CIL compilers. The default value is "/usr/libexec/selinux/hll".
 
@@ -59,7 +89,7 @@ The target platform to generate policies for. Valid values are "selinux" and "xe
 .B expand-check
 Whether or not to check "neverallow" rules when executing all
 .BR semanage
-command. It can be set to either "0" (disabled) or "1" (enabled) and by default it is enabled. There might be a large
+command. It can be set to either "0" / "false" (disabled) or "1" / "true" (enabled) and by default it is enabled. There might be a large
 penalty in execution time if this option is enabled.
 
 .TP
@@ -130,6 +160,19 @@ It can be set to either "true" or "false" and by default it is set to "true".
 .B multiple-decls
 When set to "true", duplicate type, type attribute, and role declarations will be allowed.
 It can be set to either "true" or "false" and by default it is set to "true".
+
+.TP
+.B sort-local-fcontexts
+When set to "true", the installed
+.I file_contexts.local
+file is sorted from least to most specific using the same heuristic as the policy-supplied
+.IR file_contexts ,
+so the most specific local entry wins regardless of the order the entries were added with
+.BR "semanage fcontext \-a" .
+The module store copy (and thus
+.BR "semanage fcontext \-l \-C" )
+is unaffected.
+It can be set to either "true" or "false" and by default it is set to "false", preserving insertion-order matching.
 
 .RE
 .PP

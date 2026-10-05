@@ -43,8 +43,9 @@
 #include "sha256.h"
 #include "debug.h"
 
-int semanage_module_install(semanage_handle_t * sh,
-			    char *module_data, size_t data_len, const char *name, const char *ext_lang)
+int semanage_module_install(semanage_handle_t *sh, char *module_data,
+			    size_t data_len, const char *name,
+			    const char *ext_lang)
 {
 	if (sh->funcs->install == NULL) {
 		ERR(sh,
@@ -62,9 +63,8 @@ int semanage_module_install(semanage_handle_t * sh,
 	return sh->funcs->install(sh, module_data, data_len, name, ext_lang);
 }
 
-int semanage_module_install_file(semanage_handle_t * sh,
-				 const char *module_name) {
-
+int semanage_module_install_file(semanage_handle_t *sh, const char *module_name)
+{
 	if (sh->funcs->install_file == NULL) {
 		ERR(sh,
 		    "No install function defined for this connection type.");
@@ -81,33 +81,31 @@ int semanage_module_install_file(semanage_handle_t * sh,
 	return sh->funcs->install_file(sh, module_name);
 }
 
-int semanage_module_extract(semanage_handle_t * sh,
-				 semanage_module_key_t *modkey,
-				 int extract_cil,
-				 void **mapped_data,
-				 size_t *data_len,
-				 semanage_module_info_t **modinfo) {
+int semanage_module_extract(semanage_handle_t *sh,
+			    semanage_module_key_t *modkey, int extract_cil,
+			    void **mapped_data, size_t *data_len,
+			    semanage_module_info_t **modinfo)
+{
 	if (sh->funcs->extract == NULL) {
-		ERR(sh,
-		    "No get function defined for this connection type.");
+		ERR(sh, "No get function defined for this connection type.");
 		return -1;
 	} else if (!sh->is_connected) {
 		ERR(sh, "Not connected.");
 		return -1;
 	}
-	return sh->funcs->extract(sh, modkey, extract_cil, mapped_data, data_len, modinfo);
+	return sh->funcs->extract(sh, modkey, extract_cil, mapped_data,
+				  data_len, modinfo);
 }
 
 /* Legacy function that remains to preserve ABI
  * compatibility. Please use semanage_module_install_file instead.
  */
-int semanage_module_upgrade_file(semanage_handle_t * sh,
-				 const char *module_name)
+int semanage_module_upgrade_file(semanage_handle_t *sh, const char *module_name)
 {
 	return semanage_module_install_file(sh, module_name);
 }
 
-int semanage_module_remove(semanage_handle_t * sh, char *module_name)
+int semanage_module_remove(semanage_handle_t *sh, char *module_name)
 {
 	if (sh->funcs->remove == NULL) {
 		ERR(sh, "No remove function defined for this connection type.");
@@ -124,8 +122,8 @@ int semanage_module_remove(semanage_handle_t * sh, char *module_name)
 	return sh->funcs->remove(sh, module_name);
 }
 
-int semanage_module_list(semanage_handle_t * sh,
-			 semanage_module_info_t ** modinfo, int *num_modules)
+int semanage_module_list(semanage_handle_t *sh,
+			 semanage_module_info_t **modinfo, int *num_modules)
 {
 	if (sh->funcs->list == NULL) {
 		ERR(sh, "No list function defined for this connection type.");
@@ -137,7 +135,7 @@ int semanage_module_list(semanage_handle_t * sh,
 	return sh->funcs->list(sh, modinfo, num_modules);
 }
 
-void semanage_module_info_datum_destroy(semanage_module_info_t * modinfo)
+void semanage_module_info_datum_destroy(semanage_module_info_t *modinfo)
 {
 	if (modinfo != NULL) {
 		modinfo->priority = 0;
@@ -152,26 +150,23 @@ void semanage_module_info_datum_destroy(semanage_module_info_t * modinfo)
 	}
 }
 
-
-semanage_module_info_t *semanage_module_list_nth(semanage_module_info_t * list,
+semanage_module_info_t *semanage_module_list_nth(semanage_module_info_t *list,
 						 int n)
 {
 	return list + n;
 }
 
-
-const char *semanage_module_get_name(semanage_module_info_t * modinfo)
+const char *semanage_module_get_name(semanage_module_info_t *modinfo)
 {
 	return modinfo->name;
 }
-
 
 /* Legacy function that remains to preserve ABI
  * compatibility.
  */
 extern const char *semanage_module_get_version(semanage_module_info_t *);
-const char *semanage_module_get_version(semanage_module_info_t * modinfo
-				__attribute__ ((unused)))
+const char *semanage_module_get_version(semanage_module_info_t *modinfo
+					__attribute__((unused)))
 {
 	return "";
 }
@@ -183,11 +178,11 @@ int semanage_module_info_create(semanage_handle_t *sh,
 	assert(modinfo);
 
 	*modinfo = malloc(sizeof(semanage_module_info_t));
-	if (*modinfo == NULL) return -1;
+	if (*modinfo == NULL)
+		return -1;
 
 	return semanage_module_info_init(sh, *modinfo);
 }
-
 
 int semanage_module_info_destroy(semanage_handle_t *sh,
 				 semanage_module_info_t *modinfo)
@@ -203,7 +198,6 @@ int semanage_module_info_destroy(semanage_handle_t *sh,
 
 	return semanage_module_info_init(sh, modinfo);
 }
-
 
 int semanage_module_info_init(semanage_handle_t *sh,
 			      semanage_module_info_t *modinfo)
@@ -261,7 +255,8 @@ int semanage_module_info_clone(semanage_handle_t *sh,
 	}
 
 cleanup:
-	if (status != 0) semanage_module_info_destroy(sh, target);
+	if (status != 0)
+		semanage_module_info_destroy(sh, target);
 	return status;
 }
 
@@ -278,7 +273,6 @@ int semanage_module_info_get_priority(semanage_handle_t *sh,
 	return 0;
 }
 
-
 int semanage_module_info_get_name(semanage_handle_t *sh,
 				  semanage_module_info_t *modinfo,
 				  const char **name)
@@ -291,7 +285,6 @@ int semanage_module_info_get_name(semanage_handle_t *sh,
 
 	return 0;
 }
-
 
 int semanage_module_info_get_lang_ext(semanage_handle_t *sh,
 				      semanage_module_info_t *modinfo,
@@ -306,7 +299,6 @@ int semanage_module_info_get_lang_ext(semanage_handle_t *sh,
 	return 0;
 }
 
-
 int semanage_module_info_get_enabled(semanage_handle_t *sh,
 				     semanage_module_info_t *modinfo,
 				     int *enabled)
@@ -319,7 +311,6 @@ int semanage_module_info_get_enabled(semanage_handle_t *sh,
 
 	return 0;
 }
-
 
 int semanage_module_info_set_priority(semanage_handle_t *sh,
 				      semanage_module_info_t *modinfo,
@@ -340,7 +331,6 @@ int semanage_module_info_set_priority(semanage_handle_t *sh,
 	return 0;
 }
 
-
 int semanage_module_info_set_name(semanage_handle_t *sh,
 				  semanage_module_info_t *modinfo,
 				  const char *name)
@@ -349,7 +339,7 @@ int semanage_module_info_set_name(semanage_handle_t *sh,
 	assert(modinfo);
 	assert(name);
 
-	char * tmp;
+	char *tmp;
 
 	/* Verify name */
 	if (semanage_module_validate_name(name) < 0) {
@@ -370,7 +360,6 @@ int semanage_module_info_set_name(semanage_handle_t *sh,
 	return 0;
 }
 
-
 int semanage_module_info_set_lang_ext(semanage_handle_t *sh,
 				      semanage_module_info_t *modinfo,
 				      const char *lang_ext)
@@ -379,7 +368,7 @@ int semanage_module_info_set_lang_ext(semanage_handle_t *sh,
 	assert(modinfo);
 	assert(lang_ext);
 
-	char * tmp;
+	char *tmp;
 
 	/* Verify extension */
 	if (semanage_module_validate_lang_ext(lang_ext) < 0) {
@@ -400,7 +389,6 @@ int semanage_module_info_set_lang_ext(semanage_handle_t *sh,
 	return 0;
 }
 
-
 int semanage_module_info_set_enabled(semanage_handle_t *sh,
 				     semanage_module_info_t *modinfo,
 				     int enabled)
@@ -420,12 +408,11 @@ int semanage_module_info_set_enabled(semanage_handle_t *sh,
 	return 0;
 }
 
-
-int semanage_module_get_path(semanage_handle_t *sh,
-			     const semanage_module_info_t *modinfo,
-			     enum semanage_module_path_type type,
-			     char *path,
-			     size_t len)
+static int semanage_module_build_path(semanage_handle_t *sh,
+				      const char *modules_path,
+				      const semanage_module_info_t *modinfo,
+				      enum semanage_module_path_type type,
+				      char *path, size_t len)
 {
 	assert(sh);
 	assert(modinfo);
@@ -434,142 +421,165 @@ int semanage_module_get_path(semanage_handle_t *sh,
 	int status = 0;
 	int ret = 0;
 
-	const char *modules_path = NULL;
 	const char *file = NULL;
 
-	modules_path = sh->is_in_transaction ?
-		semanage_path(SEMANAGE_TMP, SEMANAGE_MODULES):
-		semanage_path(SEMANAGE_ACTIVE, SEMANAGE_MODULES);
-
 	switch (type) {
-		case SEMANAGE_MODULE_PATH_PRIORITY:
-			/* verify priority */
-			ret = semanage_module_validate_priority(modinfo->priority);
-			if (ret < 0) {
-				errno = 0;
-				ERR(sh,
-				    "Priority %d is invalid.",
-				    modinfo->priority);
-				status = ret;
-				goto cleanup;
-			}
+	case SEMANAGE_MODULE_PATH_PRIORITY:
+		/* verify priority */
+		ret = semanage_module_validate_priority(modinfo->priority);
+		if (ret < 0) {
+			errno = 0;
+			ERR(sh, "Priority %d is invalid.", modinfo->priority);
+			status = ret;
+			goto cleanup;
+		}
 
-			ret = snprintf(path,
-				       len,
-				       "%s/%03u",
-				       modules_path,
-				       modinfo->priority);
-			if (ret < 0 || (size_t)ret >= len) {
-				ERR(sh, "Unable to compose priority path.");
-				status = -1;
-				goto cleanup;
-			}
-			break;
-		case SEMANAGE_MODULE_PATH_NAME:
-			/* verify priority and name */
-			ret = semanage_module_validate_priority(modinfo->priority);
-			if (ret < 0) {
-				errno = 0;
-				ERR(sh,
-				    "Priority %d is invalid.",
-				    modinfo->priority);
-				status = -1;
-				goto cleanup;
-			}
-
-			ret = semanage_module_validate_name(modinfo->name);
-			if (ret < 0) {
-				errno = 0;
-				ERR(sh, "Name %s is invalid.", modinfo->name);
-				status = -1;
-				goto cleanup;
-			}
-
-			ret = snprintf(path,
-				       len,
-				       "%s/%03u/%s",
-				       modules_path,
-				       modinfo->priority,
-				       modinfo->name);
-			if (ret < 0 || (size_t)ret >= len) {
-				ERR(sh, "Unable to compose name path.");
-				status = -1;
-				goto cleanup;
-			}
-			break;
-		case SEMANAGE_MODULE_PATH_HLL:
-			if (file == NULL) file = "hll";
-			/* FALLTHRU */
-		case SEMANAGE_MODULE_PATH_CIL:
-			if (file == NULL) file = "cil";
-			/* FALLTHRU */
-		case SEMANAGE_MODULE_PATH_LANG_EXT:
-			if (file == NULL) file = "lang_ext";
-
-			/* verify priority and name */
-			ret = semanage_module_validate_priority(modinfo->priority);
-			if (ret < 0) {
-				errno = 0;
-				ERR(sh,
-				    "Priority %d is invalid.",
-				    modinfo->priority);
-				status = -1;
-				goto cleanup;
-			}
-
-			ret = semanage_module_validate_name(modinfo->name);
-			if (ret < 0) {
-				errno = 0;
-				ERR(sh, "Name %s is invalid.", modinfo->name);
-				status = -1;
-				goto cleanup;
-			}
-
-			ret = snprintf(path,
-				       len,
-				       "%s/%03u/%s/%s",
-				       modules_path,
-				       modinfo->priority,
-				       modinfo->name,
-				       file);
-			if (ret < 0 || (size_t)ret >= len) {
-				ERR(sh,
-				    "Unable to compose path for %s file.",
-				    file);
-				status = -1;
-				goto cleanup;
-			}
-			break;
-		case SEMANAGE_MODULE_PATH_DISABLED:
-			/* verify name */
-			ret = semanage_module_validate_name(modinfo->name);
-			if (ret < 0) {
-				errno = 0;
-				ERR(sh, "Name %s is invalid.", modinfo->name);
-				status = -1;
-				goto cleanup;
-			}
-
-			ret = snprintf(path,
-				       len,
-				       "%s/disabled/%s",
-				       modules_path,
-				       modinfo->name);
-			if (ret < 0 || (size_t)ret >= len) {
-				ERR(sh,
-				    "Unable to compose disabled status path.");
-				status = -1;
-				goto cleanup;
-			}
-			break;
-		default:
-			ERR(sh, "Invalid module path type %d.", type);
+		ret = snprintf(path, len, "%s/%03u", modules_path,
+			       modinfo->priority);
+		if (ret < 0 || (size_t)ret >= len) {
+			ERR(sh, "Unable to compose priority path.");
 			status = -1;
 			goto cleanup;
+		}
+		break;
+	case SEMANAGE_MODULE_PATH_NAME:
+		/* verify priority and name */
+		ret = semanage_module_validate_priority(modinfo->priority);
+		if (ret < 0) {
+			errno = 0;
+			ERR(sh, "Priority %d is invalid.", modinfo->priority);
+			status = -1;
+			goto cleanup;
+		}
+
+		ret = semanage_module_validate_name(modinfo->name);
+		if (ret < 0) {
+			errno = 0;
+			ERR(sh, "Name %s is invalid.", modinfo->name);
+			status = -1;
+			goto cleanup;
+		}
+
+		ret = snprintf(path, len, "%s/%03u/%s", modules_path,
+			       modinfo->priority, modinfo->name);
+		if (ret < 0 || (size_t)ret >= len) {
+			ERR(sh, "Unable to compose name path.");
+			status = -1;
+			goto cleanup;
+		}
+		break;
+	case SEMANAGE_MODULE_PATH_HLL:
+		if (file == NULL)
+			file = "hll";
+		/* FALLTHRU */
+	case SEMANAGE_MODULE_PATH_CIL:
+		if (file == NULL)
+			file = "cil";
+		/* FALLTHRU */
+	case SEMANAGE_MODULE_PATH_LANG_EXT:
+		if (file == NULL)
+			file = "lang_ext";
+
+		/* verify priority and name */
+		ret = semanage_module_validate_priority(modinfo->priority);
+		if (ret < 0) {
+			errno = 0;
+			ERR(sh, "Priority %d is invalid.", modinfo->priority);
+			status = -1;
+			goto cleanup;
+		}
+
+		ret = semanage_module_validate_name(modinfo->name);
+		if (ret < 0) {
+			errno = 0;
+			ERR(sh, "Name %s is invalid.", modinfo->name);
+			status = -1;
+			goto cleanup;
+		}
+
+		ret = snprintf(path, len, "%s/%03u/%s/%s", modules_path,
+			       modinfo->priority, modinfo->name, file);
+		if (ret < 0 || (size_t)ret >= len) {
+			ERR(sh, "Unable to compose path for %s file.", file);
+			status = -1;
+			goto cleanup;
+		}
+		break;
+	case SEMANAGE_MODULE_PATH_DISABLED:
+		/* verify name */
+		ret = semanage_module_validate_name(modinfo->name);
+		if (ret < 0) {
+			errno = 0;
+			ERR(sh, "Name %s is invalid.", modinfo->name);
+			status = -1;
+			goto cleanup;
+		}
+
+		ret = snprintf(path, len, "%s/disabled/%s", modules_path,
+			       modinfo->name);
+		if (ret < 0 || (size_t)ret >= len) {
+			ERR(sh, "Unable to compose disabled status path.");
+			status = -1;
+			goto cleanup;
+		}
+		break;
+	default:
+		ERR(sh, "Invalid module path type %d.", type);
+		status = -1;
+		goto cleanup;
 	}
 
 cleanup:
 	return status;
+}
+
+static const char *semanage_module_write_root(semanage_handle_t *sh)
+{
+	return sh->is_in_transaction ?
+		       semanage_path(SEMANAGE_TMP, SEMANAGE_MODULES) :
+		       semanage_path(SEMANAGE_ACTIVE, SEMANAGE_MODULES);
+}
+
+int semanage_module_get_path(semanage_handle_t *sh,
+			     const semanage_module_info_t *modinfo,
+			     enum semanage_module_path_type type, char *path,
+			     size_t len)
+{
+	return semanage_module_build_path(sh, semanage_module_write_root(sh),
+					  modinfo, type, path, len);
+}
+
+/*
+ * Read-side variant: search the writable modules root (TMP when in
+ * a transaction, ACTIVE otherwise) and then each ro-store-root's ACTIVE
+ * modules root, filling @path with the first location that exists.
+ * When the module exists nowhere, @path is left with the writable root
+ * value so the caller's error message names the write target.
+ */
+int semanage_module_find_path(semanage_handle_t *sh,
+			      const semanage_module_info_t *modinfo,
+			      enum semanage_module_path_type type, char *path,
+			      size_t len)
+{
+	unsigned int i, n = semanage_ro_root_count();
+	int ret;
+
+	ret = semanage_module_build_path(sh, semanage_module_write_root(sh),
+					 modinfo, type, path, len);
+	if (ret != 0 || n == 0 || access(path, F_OK) == 0)
+		return ret;
+
+	for (i = 0; i < n; i++) {
+		ret = semanage_module_build_path(
+			sh, semanage_ro_active_path(i, SEMANAGE_MODULES),
+			modinfo, type, path, len);
+		if (ret != 0 || access(path, F_OK) == 0)
+			return ret;
+	}
+
+	/* Not found anywhere; restore the writable-root path */
+	return semanage_module_build_path(sh, semanage_module_write_root(sh),
+					  modinfo, type, path, len);
 }
 
 int semanage_module_key_create(semanage_handle_t *sh,
@@ -579,11 +589,11 @@ int semanage_module_key_create(semanage_handle_t *sh,
 	assert(modkey);
 
 	*modkey = malloc(sizeof(semanage_module_key_t));
-	if (*modkey == NULL) return -1;
+	if (*modkey == NULL)
+		return -1;
 
 	return semanage_module_key_init(sh, *modkey);
 }
-
 
 int semanage_module_key_destroy(semanage_handle_t *sh,
 				semanage_module_key_t *modkey)
@@ -598,7 +608,6 @@ int semanage_module_key_destroy(semanage_handle_t *sh,
 
 	return semanage_module_key_init(sh, modkey);
 }
-
 
 int semanage_module_key_init(semanage_handle_t *sh,
 			     semanage_module_key_t *modkey)
@@ -625,7 +634,6 @@ int semanage_module_key_get_name(semanage_handle_t *sh,
 	return 0;
 }
 
-
 int semanage_module_key_get_priority(semanage_handle_t *sh,
 				     semanage_module_key_t *modkey,
 				     uint16_t *priority)
@@ -638,7 +646,6 @@ int semanage_module_key_get_priority(semanage_handle_t *sh,
 
 	return 0;
 }
-
 
 int semanage_module_key_set_name(semanage_handle_t *sh,
 				 semanage_module_key_t *modkey,
@@ -671,7 +678,6 @@ cleanup:
 	return status;
 }
 
-
 int semanage_module_key_set_priority(semanage_handle_t *sh,
 				     semanage_module_key_t *modkey,
 				     uint16_t priority)
@@ -689,7 +695,6 @@ int semanage_module_key_set_priority(semanage_handle_t *sh,
 
 	return 0;
 }
-
 
 int semanage_module_get_enabled(semanage_handle_t *sh,
 				const semanage_module_key_t *modkey,
@@ -735,7 +740,6 @@ int semanage_module_set_enabled(semanage_handle_t *sh,
 	return sh->funcs->set_enabled(sh, modkey, enabled);
 }
 
-
 /* Converts a string to a priority
  *
  * returns -1 if str is not a valid priority.
@@ -755,7 +759,8 @@ int semanage_string_to_priority(const char *str, uint16_t *priority)
 
 	val = strtoul(str, &endptr, 10);
 
-	if (errno != 0 || endptr == str || *endptr != '\0' || val > UINT16_MAX) {
+	if (errno != 0 || endptr == str || *endptr != '\0' ||
+	    val > UINT16_MAX) {
 		goto exit;
 	}
 
@@ -810,7 +815,7 @@ int semanage_module_validate_priority(uint16_t priority)
  *
  * returns -1 if name is not valid, returns 0 otherwise
  */
-int semanage_module_validate_name(const char * name)
+int semanage_module_validate_name(const char *name)
 {
 	int status = 0;
 
@@ -939,8 +944,7 @@ int semanage_module_list_all(semanage_handle_t *sh,
 
 int semanage_module_install_info(semanage_handle_t *sh,
 				 const semanage_module_info_t *modinfo,
-				 char *data,
-				 size_t data_len)
+				 char *data, size_t data_len)
 {
 	if (sh->funcs->install_info == NULL) {
 		ERR(sh,
@@ -978,7 +982,8 @@ int semanage_module_remove_key(semanage_handle_t *sh,
 }
 
 static const char CHECKSUM_TYPE[] = "sha256";
-const size_t CHECKSUM_CONTENT_SIZE = sizeof(CHECKSUM_TYPE) + 1 + 2 * SHA256_HASH_SIZE;
+const size_t CHECKSUM_CONTENT_SIZE =
+	sizeof(CHECKSUM_TYPE) + 1 + 2 * SHA256_HASH_SIZE;
 
 void semanage_hash_to_checksum_string(const uint8_t *hash, char *checksum)
 {
@@ -991,9 +996,8 @@ void semanage_hash_to_checksum_string(const uint8_t *hash, char *checksum)
 }
 
 int semanage_module_compute_checksum(semanage_handle_t *sh,
-				     semanage_module_key_t *modkey,
-				     int cil, char **checksum,
-				     size_t *checksum_len)
+				     semanage_module_key_t *modkey, int cil,
+				     char **checksum, size_t *checksum_len)
 {
 	semanage_module_info_t *extract_info = NULL;
 	SHA256_HASH sha256_hash;
@@ -1010,7 +1014,8 @@ int semanage_module_compute_checksum(semanage_handle_t *sh,
 		return 0;
 	}
 
-	result = semanage_module_extract(sh, modkey, cil, &data, &data_len, &extract_info);
+	result = semanage_module_extract(sh, modkey, cil, &data, &data_len,
+					 &extract_info);
 	if (result != 0)
 		return -1;
 

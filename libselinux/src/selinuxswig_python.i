@@ -62,6 +62,15 @@ def install(src, dest):
     """ An SELinux-friendly shutil.move method """
     shutil.move(src, dest)
     restorecon(dest, recursive=True)
+
+def policy_open(path, mode="r", **kwargs):
+    """ Open a policy configuration file for reading, searching fallback configuration roots (see selinux_policy_open(3)). Returns a file object """
+    fd = selinux_policy_open(path, os.O_RDONLY | os.O_CLOEXEC)
+    try:
+        return os.fdopen(fd, mode, **kwargs)
+    except:  # noqa: E722
+        os.close(fd)
+        raise
 %}
 
 /* security_get_boolean_names() typemap */
@@ -69,7 +78,7 @@ def install(src, dest):
 	PyObject* list = PyList_New(*$2);
 	int i;
 	for (i = 0; i < *$2; i++) {
-		PyList_SetItem(list, i, PyString_FromString((*$1)[i]));
+		PyList_SetItem(list, i, PyUnicode_FromString((*$1)[i]));
 	}
 	$result = SWIG_AppendOutput($result, list);
 }
@@ -88,9 +97,30 @@ def install(src, dest):
   $1 = &temp;
 }
 
-%typemap(in, numinputs=0) void *(char *temp=NULL) {
-	$1 = temp;
+/*
+ * Auto-supply NULL for the opaque auditdata parameter on avc_has_perm(),
+ * avc_audit(), and selinux_check_access(); it is not usable from Python.
+ * Restricted by parameter name so that it does not swallow other void * args.
+ */
+%typemap(in, numinputs=0) void *auditdata {
+	$1 = NULL;
 }
+
+/*
+ * security_load_policy(const void *data, size_t len) accept any
+ * object exposing the buffer protocol (bytes, bytearray, mmap, ...)
+ * as a single Python argument.
+ */
+%typemap(in) (const void *data, size_t len)(Py_buffer view) {
+	view.obj = NULL;
+	if (PyObject_GetBuffer($input, &view, PyBUF_SIMPLE) < 0)
+		SWIG_fail;
+	$1 = view.buf;
+	$2 = (size_t)view.len;
+}
+%typemap(freearg) (const void *data, size_t len) {
+	PyBuffer_Release(&view$argnum);
+ }
 
 /* Makes security_compute_user() return a Python list of contexts */
 %typemap(argout) (char ***con) {
@@ -102,7 +132,7 @@ def install(src, dest):
 			len++;
 		plist = PyList_New(len);
 		for (i = 0; i < len; i++) {
-			PyList_SetItem(plist, i, PyString_FromString((*$1)[i]));
+			PyList_SetItem(plist, i, PyUnicode_FromString((*$1)[i]));
 		}
 	} else {
 		plist = PyList_New(0);
@@ -119,7 +149,7 @@ def install(src, dest):
 	if (*$1) {
 		plist = PyList_New(result);
 		for (i = 0; i < result; i++) {
-			PyList_SetItem(plist, i, PyString_FromString((*$1)[i]));
+			PyList_SetItem(plist, i, PyUnicode_FromString((*$1)[i]));
 		}
 	} else {
 		plist = PyList_New(0);

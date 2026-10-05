@@ -66,39 +66,32 @@ for i in $FS; do
 done
 }
 
-#
-# Get the default label returned from the kernel for a file with a label the
-# kernel does not understand
-#
-get_undefined_type() {
-	SELINUXMNT=`grep selinuxfs /proc/self/mountinfo | head -1 | awk '{ print $5 }'`
-	cat ${SELINUXMNT}/initial_contexts/unlabeled | secon -t
-}
-
-#
-# Get the default label for a file without a label
-#
-get_unlabeled_type() {
-	SELINUXMNT=`grep selinuxfs /proc/self/mountinfo | head -1 | awk '{ print $5 }'`
-	cat $SELINUXMNT/initial_contexts/file | secon -t
+SELINUX_CONFDIRS="/etc/selinux /usr/lib/selinux"
+selinux_resolve() {
+    for d in $SELINUX_CONFDIRS; do
+	if [ -e "$d/$1" ]; then
+	    echo "$d/$1"
+	    return 0
+	fi
+    done
+    return 1
 }
 
 exclude_dirs_from_relabelling() {
+    local f
     exclude_from_relabelling=
-    if [ -e /etc/selinux/fixfiles_exclude_dirs ]
-    then
-	while read i
-	do
-	  # skip blank line and comment
-	  # skip not absolute path
-	  # skip not directory
-	  [ -z "${i}" ] && continue
-	  [[ "${i}" =~ ^[[:blank:]]*# ]] && continue
-	  [[ ! "${i}" =~ ^/.* ]] && continue
-	  [[ ! -d "${i}" ]] && continue
-	  exclude_from_relabelling="$exclude_from_relabelling -e $i"
-	done < /etc/selinux/fixfiles_exclude_dirs
-    fi
+    f=$(selinux_resolve fixfiles_exclude_dirs) || return 0
+    while read i
+    do
+	# skip blank line and comment
+	# skip not absolute path
+	# skip not directory
+	[ -z "${i}" ] && continue
+	[[ "${i}" =~ ^[[:blank:]]*# ]] && continue
+	[[ ! "${i}" =~ ^/.* ]] && continue
+	[[ ! -d "${i}" ]] && continue
+	exclude_from_relabelling="$exclude_from_relabelling -e $i"
+    done < "$f"
     echo "$exclude_from_relabelling"
 }
 
@@ -109,6 +102,7 @@ fullFlag=0
 BOOTTIME=""
 VERBOSE="-p"
 FORCEFLAG=""
+DIGESTFLAG=""
 THREADS=""
 RPMFILES=""
 PREFC=""
@@ -119,10 +113,12 @@ RESTORECON=/sbin/restorecon
 FILESYSTEMSRW=`get_rw_labeled_mounts`
 FILESYSTEMSRO=`get_ro_labeled_mounts`
 SELINUXTYPE="targeted"
-if [ -e /etc/selinux/config ]; then
-    . /etc/selinux/config
-    FC=/etc/selinux/${SELINUXTYPE}/contexts/files/file_contexts
-else
+SELINUXCONFIG=$(selinux_resolve config)
+if [ -n "$SELINUXCONFIG" ]; then
+    . "$SELINUXCONFIG"
+fi
+FC=$(selinux_resolve "${SELINUXTYPE}/contexts/files/file_contexts")
+if [ -z "$FC" ]; then
     FC=/etc/security/selinux/file_contexts
 fi
 
@@ -153,7 +149,7 @@ newer() {
     shift
     LogReadOnly
     for m in `echo $FILESYSTEMSRW`; do
-	find $m -mount -newermt $DATE -print0 2>/dev/null | ${RESTORECON} ${FORCEFLAG} ${VERBOSE} ${THREADS} $* -i -0 -f -
+	find $m -mount -newermt $DATE -print0 2>/dev/null | ${RESTORECON} ${FORCEFLAG} ${DIGESTFLAG} ${VERBOSE} ${THREADS} $* -i -0 -f -
     done;
 }
 
@@ -169,9 +165,9 @@ done
 LogExcluded
 
 if [ -f ${PREFC} -a -x /usr/bin/diff ]; then
-	TEMPFILE=`mktemp ${FC}.XXXXXXXXXX`
+	TEMPFILE=`mktemp`
 	test -z "$TEMPFILE" && exit
-	PREFCTEMPFILE=`mktemp ${PREFC}.XXXXXXXXXX`
+	PREFCTEMPFILE=`mktemp`
 	sed -r -e 's,:s0, ,g' $PREFC | sort -u > ${PREFCTEMPFILE}
 	sed -r -e 's,:s0, ,g' $FC | sort -u |
 	/usr/bin/diff -b ${PREFCTEMPFILE} - |
@@ -197,7 +193,7 @@ if [ -f ${PREFC} -a -x /usr/bin/diff ]; then
 		  esac;
 	       fi;
 	    done |
-	${RESTORECON} ${VERBOSE} ${EXCLUDEDIRS} ${FORCEFLAG} ${THREADS} $* -i -R -f -;
+	${RESTORECON} ${VERBOSE} ${EXCLUDEDIRS} ${FORCEFLAG} ${DIGESTFLAG} ${THREADS} $* -i -R -f -;
 	rm -f ${TEMPFILE} ${PREFCTEMPFILE}
 fi
 }
@@ -220,7 +216,7 @@ fix_labels_on_mountpoint() {
 	test -z ${TMP_MOUNT+x} && echo "Unable to find temporary directory!" && exit 1
 	mkdir -p "${TMP_MOUNT}${m}" || exit 1
 	mount --bind "${m}" "${TMP_MOUNT}${m}" || exit 1
-	${SETFILES} ${VERBOSE} ${EXCLUDEDIRS} ${FORCEFLAG} ${THREADS} $* -q ${FC} -r "${TMP_MOUNT}" "${TMP_MOUNT}${m}"
+	${SETFILES} ${VERBOSE} ${EXCLUDEDIRS} ${FORCEFLAG} ${DIGESTFLAG} ${THREADS} $* -q ${FC} -r "${TMP_MOUNT}" "${TMP_MOUNT}${m}"
 	umount "${TMP_MOUNT}${m}" || exit 1
 	rm -rf "${TMP_MOUNT}" || echo "Error cleaning up."
 }
@@ -254,11 +250,11 @@ LogExcluded
 case "$RESTORE_MODE" in
     RPMFILES)
 	for i in `echo "$RPMFILES" | sed 's/,/ /g'`; do
-	    rpmlist $i | ${RESTORECON} ${VERBOSE} ${EXCLUDEDIRS} ${FORCEFLAG} ${THREADS} $* -i -R -f -
+	    rpmlist $i | ${RESTORECON} ${VERBOSE} ${EXCLUDEDIRS} ${FORCEFLAG} ${DIGESTFLAG} ${THREADS} $* -i -R -f -
 	done
     ;;
     FILEPATH)
-	${RESTORECON} ${VERBOSE} ${EXCLUDEDIRS} ${FORCEFLAG} ${THREADS} $* -R -- "$FILEPATH"
+	${RESTORECON} ${VERBOSE} ${EXCLUDEDIRS} ${FORCEFLAG} ${DIGESTFLAG} ${THREADS} $* -R -- "$FILEPATH"
     ;;
     *)
 	if [ -n "${FILESYSTEMSRW}" ]; then
@@ -266,13 +262,13 @@ case "$RESTORE_MODE" in
 	    echo "${OPTION}ing `echo ${FILESYSTEMSRW}`"
 
 	    if [ -z "$BIND_MOUNT_FILESYSTEMS" ]; then
-	        ${SETFILES} ${VERBOSE} ${EXCLUDEDIRS} ${FORCEFLAG} $* -q ${THREADS} ${FC} ${FILESYSTEMSRW}
+	        ${SETFILES} ${VERBOSE} ${EXCLUDEDIRS} ${FORCEFLAG} ${DIGESTFLAG} $* -q ${THREADS} ${FC} ${FILESYSTEMSRW}
 	    else
 	        # we bind mount so we can fix the labels of files that have already been
 	        # mounted over
 	        for m in `echo $FILESYSTEMSRW`; do
 	            TMP_MOUNT="$(mktemp -p /run -d fixfiles.XXXXXXXXXX)"
-	            export SETFILES VERBOSE EXCLUDEDIRS FORCEFLAG THREADS FC TMP_MOUNT m
+	            export SETFILES VERBOSE EXCLUDEDIRS FORCEFLAG DIGESTFLAG THREADS FC TMP_MOUNT m
 	            if type unshare &> /dev/null; then
 	                unshare -m bash -c "fix_labels_on_mountpoint $*" || exit $?
 	            else
@@ -288,16 +284,6 @@ case "$RESTORE_MODE" in
 	if [ ${OPTION} != "Relabel" ]; then
 	    return
 	fi
-	echo "Cleaning up labels on /tmp"
-	rm -rf /tmp/gconfd-* /tmp/pulse-* /tmp/orbit-*
-
-	UNDEFINED=`get_undefined_type` || exit $?
-	UNLABELED=`get_unlabeled_type` || exit $?
-	find /tmp \( -context "*:${UNLABELED}*" -o -context "*:${UNDEFINED}*" \) \( -type s -o -type p \) -delete
-	find /tmp \( -context "*:${UNLABELED}*" -o -context "*:${UNDEFINED}*" \) -exec chcon --no-dereference --reference /tmp {} \;
-	find /var/tmp \( -context "*:${UNLABELED}*" -o -context "*:${UNDEFINED}*" \) -exec chcon --no-dereference --reference /var/tmp {} \;
-	find /var/run \( -context "*:${UNLABELED}*" -o -context "*:${UNDEFINED}*" \) -exec chcon --no-dereference --reference /var/run {} \;
-	[ ! -e /var/lib/debug ] || find /var/lib/debug \( -context "*:${UNLABELED}*" -o -context "*:${UNDEFINED}*" \) -exec chcon --no-dereference --reference /lib {} \;
     ;;
 esac
 }
@@ -350,6 +336,7 @@ case "$1" in
 	fi
 	> /.autorelabel || exit $?
 	[ -z "$FORCEFLAG" ] || echo -n "$FORCEFLAG " >> /.autorelabel
+	[ -z "$DIGESTFLAG" ] || echo -n "$DIGESTFLAG " >> /.autorelabel
 	[ -z "$BOOTTIME" ] || echo -n "-N $BOOTTIME " >> /.autorelabel
 	[ -z "$BIND_MOUNT_FILESYSTEMS" ] || echo -n "-M " >> /.autorelabel
 	[ -z "$THREADS" ] || echo -n "$THREADS " >> /.autorelabel
@@ -364,17 +351,17 @@ esac
 }
 usage() {
 	echo $"""
-Usage: $0 [-v] [-F] [-M] [-f] [-T nthreads] relabel
+Usage: $0 [-v] [-F] [-I|-D] [-M] [-f] [-T nthreads] relabel
 or
-Usage: $0 [-v] [-F] [-B | -N time ] [-T nthreads] { check | restore | verify }
+Usage: $0 [-v] [-F] [-I|-D] [-B | -N time ] [-T nthreads] { check | restore | verify }
 or
-Usage: $0 [-v] [-F] [-T nthreads] { check | restore | verify } dir/file ...
+Usage: $0 [-v] [-F] [-I|-D] [-T nthreads] { check | restore | verify } dir/file ...
 or
-Usage: $0 [-v] [-F] [-T nthreads] -R rpmpackage[,rpmpackage...] { check | restore | verify }
+Usage: $0 [-v] [-F] [-I|-D] [-T nthreads] -R rpmpackage[,rpmpackage...] { check | restore | verify }
 or
-Usage: $0 [-v] [-F] [-T nthreads] -C PREVIOUS_FILECONTEXT { check | restore | verify }
+Usage: $0 [-v] [-F] [-I|-D] [-T nthreads] -C PREVIOUS_FILECONTEXT { check | restore | verify }
 or
-Usage: $0 [-F] [-M] [-B] [-T nthreads] onboot
+Usage: $0 [-F] [-I|-D] [-M] [-B] [-T nthreads] onboot
 """
 }
 
@@ -393,7 +380,7 @@ set_restore_mode() {
 }
 
 # See how we were called.
-while getopts "N:BC:FfR:l:vMT:" i; do
+while getopts "N:BC:FIDfR:l:vMT:" i; do
     case "$i" in
 	B)
 		BOOTTIME=`/bin/who -b | awk '{print $3}'`
@@ -424,6 +411,12 @@ while getopts "N:BC:FfR:l:vMT:" i; do
 		;;
 	F)
 		FORCEFLAG="-F"
+		;;
+	I)
+		DIGESTFLAG="-I"
+		;;
+	D)
+		[ -z "$DIGESTFLAG" ] && DIGESTFLAG="-D"
 		;;
 	f)
 		fullFlag=1

@@ -19,7 +19,7 @@ static void customizable_init(void)
 	unsigned int ctr = 0, i;
 	char **list = NULL;
 
-	fp = fopen(selinux_customizable_types_path(), "re");
+	fp = selinux_policy_fopen(selinux_customizable_types_path(), "re");
 	if (!fp)
 		return;
 
@@ -42,9 +42,10 @@ static void customizable_init(void)
 		list = calloc(ctr + 1, sizeof(char *));
 		if (list) {
 			i = 0;
-			while (fgets_unlocked(buf, selinux_page_size, fp)
-			       && i < ctr) {
-				buf[strlen(buf) - 1] = 0;
+			while (fgets_unlocked(buf, selinux_page_size, fp) &&
+			       i < ctr) {
+				if (buf[0] && buf[strlen(buf) - 1] == '\n')
+					buf[strlen(buf) - 1] = '\0';
 				list[i] = strdup(buf);
 				if (!list[i]) {
 					unsigned int j;
@@ -65,7 +66,7 @@ static void customizable_init(void)
 	customizable_list = list;
 }
 
-int is_context_customizable(const char * scontext)
+int is_context_customizable(const char *scontext)
 {
 	int i;
 	const char *type;

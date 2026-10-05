@@ -99,6 +99,21 @@ and if successful write an SHA1 digest of the specfile entries to an
 extended attribute as described in the
 .B NOTES
 section.
+.RS
+Note that directory cycles encountered while descending, for example a bind
+mount of an ancestor directory or nested BTRFS subvolumes, are not followed.
+A warning is logged, the offending directory is not descended into and the
+file tree walk continues with the remaining entries. Such cycles are not
+treated as errors, therefore they neither abort the file tree walk when
+.B SELINUX_RESTORECON_ABORT_ON_ERROR
+is set, nor are they included in the count returned by
+.BR selinux_restorecon_get_skipped_errors (3)
+when
+.B SELINUX_RESTORECON_COUNT_ERRORS
+is set. See the
+.B NOTES
+section for details of the previous behavior.
+.RE
 .sp
 .B SELINUX_RESTORECON_VERBOSE
 log file label changes.
@@ -182,6 +197,19 @@ completes with success. In case any errors were skipped during the file tree
 walk, the specfile entries SHA1 digest will not have been written to the
 .IR security.sehash
 extended attribute.
+.sp
+.B SELINUX_RESTORECON_SET_USER_ROLE
+Set the user and role component of the security context too.
+.sp
+.B SELINUX_RESTORECON_COUNT_RELABELED
+Count the number of relabeled files or the number that would be relabeled if
+.B SELINUX_RESTORECON_NOCHANGE
+was not set.
+.sp
+.B SELINUX_RESTORECON_SKIP_MULTILINK
+Skip any non-directory files that have more than one hard link.
+Use this option when relabeling untrusted directories that might
+contain hard links to files owned by others.
 .RE
 .sp
 The behavior regarding the checking and updating of the SHA1 digest described
@@ -289,6 +317,19 @@ with the
 .B SELINUX_CB_LOG
 .I type
 option.
+.IP "6." 4
+Up to and including libselinux 3.11 a directory cycle was fatal:
+.BR selinux_restorecon ()
+logged an error, stopped the file tree walk and returned \-1 with
+.I errno
+set to
+.BR ELOOP ,
+regardless of the
+.B SELINUX_RESTORECON_ABORT_ON_ERROR
+and
+.B SELINUX_RESTORECON_COUNT_ERRORS
+flags. Since then the cycle is skipped as described above, so a file tree
+walk over a directory tree containing a cycle can complete successfully.
 .
 .SH "SEE ALSO"
 .BR selabel_get_digests_all_partial_matches (3),

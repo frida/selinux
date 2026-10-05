@@ -15,10 +15,16 @@ This command maps file paths using regular expressions to SELinux labels.
 
 FILE_SPEC may contain either a fully qualified path,
 or a Perl compatible regular expression (PCRE),
-describing fully qualified path(s). The only PCRE flag in use is PCRE2_DOTALL,
-which causes a wildcard '.' to match anything, including a new line.
+describing fully qualified path(s).
+The regular expression is anchored at both ends,
+so the whole path must match; a leading ^ or trailing $ is not required.
+The PCRE flags in use are PCRE2_DOTALL,
+which causes a wildcard '.' to match anything, including a new line,
+PCRE2_DOLLAR_ENDONLY, and PCRE2_EXTRA_MATCH_LINE,
+which apply the anchoring.
 Strings representing paths are processed as bytes (as opposed to Unicode),
 meaning that non-ASCII characters are not matched by a single wildcard.
+If you need to match a non-ASCII character with a wildcard, put it in a group, e.g. '(č)*'
 
 Note, that file context definitions specified using 'semanage fcontext'
 (i.e. local file context modifications stored in file_contexts.local)
@@ -67,7 +73,7 @@ Extract customizable commands, for use within a transaction
 Remove all local customizations
 .TP
 .I   \-e TARGET_PATH, \-\-equal TARGET_PATH
-Substitute FILE_SPEC with TARGET_PATH for file label lookup. This is used with fcontext. Requires source and target path arguments to be path prefixes and does not support regular expressions. The context labeling for the target subtree is made equivalent to that defined for the source.
+Substitute FILE_SPEC with TARGET_PATH for file label lookup. This is used with fcontext. Requires source and target path arguments to be path prefixes and does not support regular expressions. The context labeling for the target subtree is made equivalent to that defined for the source. Note that substitution based on another substitution does not work.
 .TP
 .I   \-f [{a,f,d,c,b,s,l,p}], \-\-ftype [{a,f,d,c,b,s,l,p}]
 File Type. This is used with fcontext. Requires a file type as shown in the mode field by ls, e.g. use 'd' to match only directories or 'f' to match only regular files. The following file type options can be passed: f (regular file),d (directory),c (character device), b (block device),s (socket),l (symbolic link),p (named pipe).  If you do not specify a file type, the file type will default to "all files".
@@ -93,6 +99,10 @@ Substitute /home1 with /home when setting file context
 i.e. label everything under /home1 the same way /home is labeled
 # semanage fcontext \-a \-e /home /home1
 # restorecon \-R \-v /home1
+
+If you substitute /home2 with /home1 from the example above it will not work. You must use direct substitution
+# semanage fcontext \-a \-e /home /home2
+# restorecon \-R \-v /home2
 
 For home directories under top level directory, for example /disk6/home,
 execute the following commands.

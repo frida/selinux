@@ -1,8 +1,3 @@
-/* Workaround for http://bugs.python.org/issue4835 */
-#ifndef SIZEOF_SOCKET_T
-#define SIZEOF_SOCKET_T SIZEOF_INT
-#endif
-
 #include <Python.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -51,13 +46,25 @@ static struct avc_t *avc = NULL;
 
 static sidtab_t sidtab;
 
-static int load_booleans(const sepol_bool_t * boolean,
-			 void *arg __attribute__ ((__unused__)))
+static int load_booleans(const sepol_bool_t *boolean, void *arg)
 {
-	boollist[boolcnt] = malloc(sizeof(struct boolean_t));
-	boollist[boolcnt]->name = strdup(sepol_bool_get_name(boolean));
-	boollist[boolcnt]->active = sepol_bool_get_value(boolean);
-	boolcnt++;
+	const unsigned int *boolmax = arg;
+	struct boolean_t *b;
+
+	/* Guard against writing past the array sized by sepol_bool_count(). */
+	if ((unsigned int)boolcnt >= *boolmax)
+		return -1;
+
+	b = malloc(sizeof(struct boolean_t));
+	if (!b)
+		return -1;
+	b->name = strdup(sepol_bool_get_name(boolean));
+	if (!b->name) {
+		free(b);
+		return -1;
+	}
+	b->active = sepol_bool_get_value(boolean);
+	boollist[boolcnt++] = b;
 	return 0;
 }
 
@@ -71,9 +78,14 @@ static int check_booleans(struct boolean_t **bools)
 	sepol_bool_key_t *key = NULL;
 	sepol_bool_t *boolean = NULL;
 	int fcnt = 0;
-	int *foundlist = calloc(boolcnt, sizeof(int));
+	int *foundlist;
+
+	if (boolcnt == 0)
+		return 0;
+
+	foundlist = calloc(boolcnt, sizeof(int));
 	if (!foundlist) {
-		PyErr_SetString( PyExc_MemoryError, "Out of memory\n");
+		PyErr_SetString(PyExc_MemoryError, "Out of memory\n");
 		return fcnt;
 	}
 	for (i = 0; i < boolcnt; i++) {
@@ -81,30 +93,27 @@ static int check_booleans(struct boolean_t **bools)
 		int active = boollist[i]->active;
 		rc = sepol_bool_key_create(avc->handle, name, &key);
 		if (rc < 0) {
-			PyErr_SetString( PyExc_RuntimeError, 
-					 "Could not create boolean key.\n");
+			PyErr_SetString(PyExc_RuntimeError,
+					"Could not create boolean key.\n");
 			break;
 		}
-		rc = sepol_bool_query(avc->handle,
-				      avc->policydb,
-				      key, &boolean);
+		rc = sepol_bool_query(avc->handle, avc->policydb, key,
+				      &boolean);
 
 		if (rc < 0) {
-			snprintf(errormsg, sizeof(errormsg), 
+			snprintf(errormsg, sizeof(errormsg),
 				 "Could not find boolean %s.\n", name);
-			PyErr_SetString( PyExc_RuntimeError, errormsg);
+			PyErr_SetString(PyExc_RuntimeError, errormsg);
 			break;
 		}
 
 		sepol_bool_set_value(boolean, !active);
 
-		rc = sepol_bool_set(avc->handle,
-				    avc->policydb,
-				    key, boolean);
+		rc = sepol_bool_set(avc->handle, avc->policydb, key, boolean);
 		if (rc < 0) {
-			snprintf(errormsg, sizeof(errormsg), 
+			snprintf(errormsg, sizeof(errormsg),
 				 "Could not set boolean data %s.\n", name);
-			PyErr_SetString( PyExc_RuntimeError, errormsg);
+			PyErr_SetString(PyExc_RuntimeError, errormsg);
 			break;
 		}
 
@@ -112,11 +121,12 @@ static int check_booleans(struct boolean_t **bools)
 		rc = sepol_compute_av_reason(avc->ssid, avc->tsid, avc->tclass,
 					     avc->av, &avd, &reason);
 		if (rc < 0) {
-			snprintf(errormsg, sizeof(errormsg), 
-				 "Error during access vector computation, skipping...");
-			PyErr_SetString( PyExc_RuntimeError, errormsg);
+			snprintf(
+				errormsg, sizeof(errormsg),
+				"Error during access vector computation, skipping...");
+			PyErr_SetString(PyExc_RuntimeError, errormsg);
 
-			sepol_bool_free(boolean);
+			/* boolean is freed by the post-loop cleanup */
 			break;
 		} else {
 			if (!reason) {
@@ -124,15 +134,14 @@ static int check_booleans(struct boolean_t **bools)
 				fcnt++;
 			}
 			sepol_bool_set_value(boolean, active);
-			rc = sepol_bool_set(avc->handle,
-					    avc->policydb, key,
+			rc = sepol_bool_set(avc->handle, avc->policydb, key,
 					    boolean);
 			if (rc < 0) {
-				snprintf(errormsg, sizeof(errormsg), 
+				snprintf(errormsg, sizeof(errormsg),
 					 "Could not set boolean data %s.\n",
 					 name);
-			
-				PyErr_SetString( PyExc_RuntimeError, errormsg);
+
+				PyErr_SetString(PyExc_RuntimeError, errormsg);
 				break;
 			}
 		}
@@ -150,7 +159,7 @@ static int check_booleans(struct boolean_t **bools)
 	if (fcnt > 0) {
 		*bools = calloc(fcnt + 1, sizeof(struct boolean_t));
 		if (!*bools) {
-			PyErr_SetString( PyExc_MemoryError, "Out of memory\n");
+			PyErr_SetString(PyExc_MemoryError, "Out of memory\n");
 			free(foundlist);
 			return 0;
 		}
@@ -159,6 +168,11 @@ static int check_booleans(struct boolean_t **bools)
 		for (i = 0; i < fcnt; i++) {
 			int ctr = foundlist[i];
 			b[i].name = strdup(boollist[ctr]->name);
+			if (!b[i].name) {
+				PyErr_SetString(PyExc_MemoryError,
+						"Out of memory\n");
+				break;
+			}
 			b[i].active = !boollist[ctr]->active;
 		}
 	}
@@ -166,12 +180,13 @@ static int check_booleans(struct boolean_t **bools)
 	return fcnt;
 }
 
-static PyObject *finish(PyObject *self __attribute__((unused)), PyObject *args) {
+static PyObject *finish(PyObject *self __attribute__((unused)), PyObject *args)
+{
 	PyObject *result = 0;
-  
-	if (PyArg_ParseTuple(args,(char *)":finish")) {
+
+	if (PyArg_ParseTuple(args, ":finish")) {
 		int i = 0;
-		if (! avc)
+		if (!avc)
 			Py_RETURN_NONE;
 
 		for (i = 0; i < boolcnt; i++) {
@@ -194,12 +209,11 @@ static PyObject *finish(PyObject *self __attribute__((unused)), PyObject *args) 
 	return result;
 }
 
-
 static int __policy_init(const char *init_path)
 {
 	FILE *fp = NULL;
 	const char *curpolicy;
-	char errormsg[PATH_MAX+1024+20];
+	char errormsg[PATH_MAX + 1024 + 20];
 	struct sepol_policy_file *pf = NULL;
 	int rc;
 	unsigned int cnt;
@@ -210,25 +224,25 @@ static int __policy_init(const char *init_path)
 		curpolicy = selinux_current_policy_path();
 		if (!curpolicy) {
 			/* SELinux disabled, must use -p option. */
-			snprintf(errormsg, sizeof(errormsg),
-				 "You must specify the -p option with the path to the policy file.\n");
-			PyErr_SetString( PyExc_ValueError, errormsg);
+			snprintf(
+				errormsg, sizeof(errormsg),
+				"You must specify the -p option with the path to the policy file.\n");
+			PyErr_SetString(PyExc_ValueError, errormsg);
 			return 1;
 		}
 	}
 
 	fp = fopen(curpolicy, "re");
 	if (!fp) {
-		snprintf(errormsg, sizeof(errormsg),
-			 "unable to open %s:  %m\n",
+		snprintf(errormsg, sizeof(errormsg), "unable to open %s:  %m\n",
 			 curpolicy);
-		PyErr_SetString( PyExc_ValueError, errormsg);
+		PyErr_SetString(PyExc_ValueError, errormsg);
 		return 1;
 	}
 
 	avc = calloc(1, sizeof(struct avc_t));
 	if (!avc) {
-		PyErr_SetString( PyExc_MemoryError, "Out of memory\n");
+		PyErr_SetString(PyExc_MemoryError, "Out of memory\n");
 		fclose(fp);
 		return 1;
 	}
@@ -238,16 +252,16 @@ static int __policy_init(const char *init_path)
 	   Otherwise, we'd just use sepol_set_policydb_from_file() here. */
 	if (sepol_policy_file_create(&pf) ||
 	    sepol_policydb_create(&avc->policydb)) {
-		snprintf(errormsg, sizeof(errormsg), 
+		snprintf(errormsg, sizeof(errormsg),
 			 "policydb_init failed: %m\n");
-		PyErr_SetString( PyExc_RuntimeError, errormsg);
+		PyErr_SetString(PyExc_RuntimeError, errormsg);
 		goto err;
 	}
-	sepol_policy_file_set_fp(pf, fp);	
+	sepol_policy_file_set_fp(pf, fp);
 	if (sepol_policydb_read(avc->policydb, pf)) {
-		snprintf(errormsg, sizeof(errormsg), 
+		snprintf(errormsg, sizeof(errormsg),
 			 "invalid binary policy %s\n", curpolicy);
-		PyErr_SetString( PyExc_ValueError, errormsg);
+		PyErr_SetString(PyExc_ValueError, errormsg);
 		goto err;
 	}
 	fclose(fp);
@@ -257,41 +271,44 @@ static int __policy_init(const char *init_path)
 	/* Turn off messages */
 	sepol_msg_set_callback(avc->handle, NULL, NULL);
 
-	rc = sepol_bool_count(avc->handle,
-			      avc->policydb, &cnt);
+	rc = sepol_bool_count(avc->handle, avc->policydb, &cnt);
 	if (rc < 0) {
-		PyErr_SetString( PyExc_RuntimeError, "unable to get bool count\n");
+		PyErr_SetString(PyExc_RuntimeError,
+				"unable to get bool count\n");
 		goto err;
 	}
 
-	boollist = calloc(cnt, sizeof(*boollist));
-	if (!boollist) {
-		PyErr_SetString( PyExc_MemoryError, "Out of memory\n");
-		goto err;
-	}
+	if (cnt > 0) {
+		boollist = calloc(cnt, sizeof(*boollist));
+		if (!boollist) {
+			PyErr_SetString(PyExc_MemoryError, "Out of memory\n");
+			goto err;
+		}
 
-	sepol_bool_iterate(avc->handle, avc->policydb,
-			   load_booleans, NULL);
+		sepol_bool_iterate(avc->handle, avc->policydb, load_booleans,
+				   &cnt);
+	}
 
 	/* Initialize the sidtab for subsequent use by sepol_context_to_sid
 	   and sepol_compute_av_reason. */
 	rc = sepol_sidtab_init(&sidtab);
 	if (rc < 0) {
-		PyErr_SetString( PyExc_RuntimeError, "unable to init sidtab\n");
+		PyErr_SetString(PyExc_RuntimeError, "unable to init sidtab\n");
 		goto err;
 	}
 	sepol_set_sidtab(&sidtab);
 	return 0;
 
 err:
-	if (boollist)
-		free(boollist);
-	if (avc){
+	free(boollist);
+	boollist = NULL;
+	if (avc) {
 		if (avc->handle)
 			sepol_handle_destroy(avc->handle);
 		if (avc->policydb)
 			sepol_policydb_free(avc->policydb);
 		free(avc);
+		avc = NULL;
 	}
 	if (pf)
 		sepol_policy_file_free(pf);
@@ -300,29 +317,32 @@ err:
 	return 1;
 }
 
-static PyObject *init(PyObject *self __attribute__((unused)), PyObject *args) {
-  int result;
-  char *init_path = NULL;
-  if (avc) {
-	  PyErr_SetString( PyExc_RuntimeError, "init called multiple times");
-	  return NULL;
-  }
-  if (!PyArg_ParseTuple(args,(char *)"|s:policy_init",&init_path))
-    return NULL;
-  result = __policy_init(init_path);
-  return Py_BuildValue("i", result);
+static PyObject *init(PyObject *self __attribute__((unused)), PyObject *args)
+{
+	int result;
+	char *init_path = NULL;
+	if (avc) {
+		PyErr_SetString(PyExc_RuntimeError,
+				"init called multiple times");
+		return NULL;
+	}
+	if (!PyArg_ParseTuple(args, "|s:policy_init", &init_path))
+		return NULL;
+	result = __policy_init(init_path);
+	return Py_BuildValue("i", result);
 }
 
-#define RETURN(X) \
-	{ \
-		return Py_BuildValue("iO", (X), Py_None);	\
+#define RETURN(X)                                         \
+	{                                                 \
+		return Py_BuildValue("iO", (X), Py_None); \
 	}
 
-static PyObject *analyze(PyObject *self __attribute__((unused)) , PyObject *args) {
+static PyObject *analyze(PyObject *self __attribute__((unused)), PyObject *args)
+{
 	char *reason_buf = NULL;
-	char * scon;
-	char * tcon;
-	char *tclassstr; 
+	char *scon;
+	char *tcon;
+	char *tclassstr;
 	PyObject *listObj;
 	PyObject *strObj;
 	int numlines;
@@ -335,14 +355,16 @@ static PyObject *analyze(PyObject *self __attribute__((unused)) , PyObject *args
 	int rc;
 	int i = 0;
 
-	if (!PyArg_ParseTuple(args,(char *)"sssO!:audit2why",&scon,&tcon,&tclassstr,&PyList_Type, &listObj)) 
+	if (!PyArg_ParseTuple(args, "sssO!:audit2why", &scon, &tcon, &tclassstr,
+			      &PyList_Type, &listObj))
 		return NULL;
-  
+
 	/* get the number of lines passed to us */
 	numlines = PyList_Size(listObj);
 
 	/* should raise an error here. */
-	if (numlines < 0)	return NULL; /* Not a list */
+	if (numlines < 0)
+		return NULL; /* Not a list */
 
 	if (!avc)
 		RETURN(NOPOLICY)
@@ -364,19 +386,18 @@ static PyObject *analyze(PyObject *self __attribute__((unused)) , PyObject *args
 
 	/* iterate over items of the list, grabbing strings, and parsing
 	   for numbers */
-	for (i = 0; i < numlines; i++){
+	for (i = 0; i < numlines; i++) {
 		const char *permstr;
 
 		/* grab the string object from the next element of the list */
 		strObj = PyList_GetItem(listObj, i); /* Can't fail */
-		
+
 		/* make it a string */
-#if PY_MAJOR_VERSION >= 3
-		permstr = _PyUnicode_AsString( strObj );
-#else
-		permstr = PyString_AsString( strObj );
-#endif
-		
+		permstr = _PyUnicode_AsString(strObj);
+		if (!permstr)
+			/* not a string; exception already set */
+			return NULL;
+
 		rc = sepol_string_to_av_perm(tclass, permstr, &perm);
 		if (rc < 0)
 			RETURN(BADPERM)
@@ -385,7 +406,8 @@ static PyObject *analyze(PyObject *self __attribute__((unused)) , PyObject *args
 	}
 
 	/* Reproduce the computation. */
-	rc = sepol_compute_av_reason_buffer(ssid, tsid, tclass, av, &avd, &reason, &reason_buf, 0);
+	rc = sepol_compute_av_reason_buffer(ssid, tsid, tclass, av, &avd,
+					    &reason, &reason_buf, 0);
 	if (rc < 0)
 		RETURN(BADCOMPUTE)
 
@@ -408,13 +430,15 @@ static PyObject *analyze(PyObject *self __attribute__((unused)) , PyObject *args
 			struct boolean_t *b = bools;
 			int len = 0;
 			while (b->name) {
-				len++; b++;
+				len++;
+				b++;
 			}
 			b = bools;
 			outboollist = PyList_New(len);
 			len = 0;
-			while(b->name) {
-				PyObject *bool_ = Py_BuildValue("(si)", b->name, b->active);
+			while (b->name) {
+				PyObject *bool_ = Py_BuildValue("(si)", b->name,
+								b->active);
 				PyList_SetItem(outboollist, len++, bool_);
 				b++;
 			}
@@ -440,65 +464,49 @@ static PyObject *analyze(PyObject *self __attribute__((unused)) , PyObject *args
 	if (reason & SEPOL_COMPUTEAV_BOUNDS)
 		RETURN(BOUNDS)
 
-        RETURN(BADCOMPUTE)
+	RETURN(BADCOMPUTE)
 }
 
 static PyMethodDef audit2whyMethods[] = {
-    {"init",  init, METH_VARARGS,
-     "Initialize policy database."},
-    {"analyze",  analyze, METH_VARARGS,
-     "Analyze AVC."},
-    {"finish",  finish, METH_VARARGS,
-     "Finish using policy, free memory."},
-    {NULL, NULL, 0, NULL}        /* Sentinel */
+	{ "init", init, METH_VARARGS, "Initialize policy database." },
+	{ "analyze", analyze, METH_VARARGS, "Analyze AVC." },
+	{ "finish", finish, METH_VARARGS, "Finish using policy, free memory." },
+	{ NULL, NULL, 0, NULL } /* Sentinel */
 };
 
-#if PY_MAJOR_VERSION >= 3
-/* Module-initialization logic specific to Python 3 */
-static struct PyModuleDef moduledef = {
-	PyModuleDef_HEAD_INIT,
-	"audit2why",
-	NULL,
-	0,
-	audit2whyMethods,
-	NULL,
-	NULL,
-	NULL,
-	NULL
-};
+/* Module-initialization logic */
+static struct PyModuleDef moduledef = { PyModuleDef_HEAD_INIT,
+					"audit2why",
+					NULL,
+					0,
+					audit2whyMethods,
+					NULL,
+					NULL,
+					NULL,
+					NULL };
 
 PyMODINIT_FUNC PyInit_audit2why(void); /* silence -Wmissing-prototypes */
 PyMODINIT_FUNC PyInit_audit2why(void)
-#else
-PyMODINIT_FUNC initaudit2why(void); /* silence -Wmissing-prototypes */
-PyMODINIT_FUNC initaudit2why(void)
-#endif
 {
 	PyObject *m;
-#if PY_MAJOR_VERSION >= 3
 	m = PyModule_Create(&moduledef);
 	if (m == NULL) {
 		return NULL;
 	}
-#else
-	m  = Py_InitModule("audit2why", audit2whyMethods);
-#endif
-	PyModule_AddIntConstant(m,"UNKNOWN", UNKNOWN);
-	PyModule_AddIntConstant(m,"BADSCON", BADSCON);
-	PyModule_AddIntConstant(m,"BADTCON", BADTCON);
-	PyModule_AddIntConstant(m,"BADTCLASS", BADTCLASS);
-	PyModule_AddIntConstant(m,"BADPERM", BADPERM);
-	PyModule_AddIntConstant(m,"BADCOMPUTE", BADCOMPUTE);
-	PyModule_AddIntConstant(m,"NOPOLICY", NOPOLICY);
-	PyModule_AddIntConstant(m,"ALLOW", ALLOW);
-	PyModule_AddIntConstant(m,"DONTAUDIT", DONTAUDIT);
-	PyModule_AddIntConstant(m,"TERULE", TERULE);
-	PyModule_AddIntConstant(m,"BOOLEAN", BOOLEAN);
-	PyModule_AddIntConstant(m,"CONSTRAINT", CONSTRAINT);
-	PyModule_AddIntConstant(m,"RBAC", RBAC);
-	PyModule_AddIntConstant(m,"BOUNDS", BOUNDS);
+	PyModule_AddIntConstant(m, "UNKNOWN", UNKNOWN);
+	PyModule_AddIntConstant(m, "BADSCON", BADSCON);
+	PyModule_AddIntConstant(m, "BADTCON", BADTCON);
+	PyModule_AddIntConstant(m, "BADTCLASS", BADTCLASS);
+	PyModule_AddIntConstant(m, "BADPERM", BADPERM);
+	PyModule_AddIntConstant(m, "BADCOMPUTE", BADCOMPUTE);
+	PyModule_AddIntConstant(m, "NOPOLICY", NOPOLICY);
+	PyModule_AddIntConstant(m, "ALLOW", ALLOW);
+	PyModule_AddIntConstant(m, "DONTAUDIT", DONTAUDIT);
+	PyModule_AddIntConstant(m, "TERULE", TERULE);
+	PyModule_AddIntConstant(m, "BOOLEAN", BOOLEAN);
+	PyModule_AddIntConstant(m, "CONSTRAINT", CONSTRAINT);
+	PyModule_AddIntConstant(m, "RBAC", RBAC);
+	PyModule_AddIntConstant(m, "BOUNDS", BOUNDS);
 
-#if PY_MAJOR_VERSION >= 3
 	return m;
-#endif
 }

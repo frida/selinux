@@ -2,16 +2,17 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
-#include "get_default_type_internal.h"
 #include <errno.h>
+#include "get_default_type_internal.h"
+#include "selinux_internal.h"
 
-static int find_default_type(FILE * fp, const char *role, char **type);
+static int find_default_type(FILE *fp, const char *role, char **type);
 
 int get_default_type(const char *role, char **type)
 {
 	FILE *fp = NULL;
 
-	fp = fopen(selinux_default_type_path(), "re");
+	fp = selinux_policy_fopen(selinux_default_type_path(), "re");
 	if (!fp)
 		return -1;
 
@@ -24,7 +25,7 @@ int get_default_type(const char *role, char **type)
 	return 0;
 }
 
-static int find_default_type(FILE * fp, const char *role, char **type)
+static int find_default_type(FILE *fp, const char *role, char **type)
 {
 	char buf[250];
 	const char *ptr = "", *end;
@@ -38,8 +39,8 @@ static int find_default_type(FILE * fp, const char *role, char **type)
 			errno = EINVAL;
 			return -1;
 		}
-		if (buf[strlen(buf) - 1])
-			buf[strlen(buf) - 1] = 0;
+		if (buf[0] && buf[strlen(buf) - 1] == '\n')
+			buf[strlen(buf) - 1] = '\0';
 
 		ptr = buf;
 		while (*ptr && isspace((unsigned char)*ptr))
@@ -62,7 +63,7 @@ static int find_default_type(FILE * fp, const char *role, char **type)
 		return -1;
 	}
 
-	t = strndup(ptr, strlen(buf) - len - 1);
+	t = strdup(ptr);
 	if (!t)
 		return -1;
 	*type = t;

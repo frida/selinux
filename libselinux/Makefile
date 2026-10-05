@@ -3,6 +3,7 @@ SUBDIRS = include src utils man
 PKG_CONFIG ?= pkg-config
 DISABLE_SETRANS ?= n
 DISABLE_RPM ?= n
+DISABLE_UTF ?= n
 ANDROID_HOST ?= n
 LABEL_BACKEND_ANDROID ?= n
 ifeq ($(ANDROID_HOST),y)
@@ -20,6 +21,9 @@ ifeq ($(DISABLE_BOOL),y)
 endif
 ifeq ($(DISABLE_X11),y)
 	DISABLE_FLAGS+= -DNO_X_BACKEND
+endif
+ifeq ($(DISABLE_UTF),y)
+	DISABLE_FLAGS+= -DNO_UTF
 endif
 export DISABLE_SETRANS DISABLE_RPM DISABLE_FLAGS ANDROID_HOST DISABLE_X11 LABEL_BACKEND_ANDROID
 
@@ -50,10 +54,20 @@ COMPILER := clang
 endif
 export COMPILER
 
-all install relabel clean distclean:
+all install relabel:
 	@for subdir in $(SUBDIRS); do \
 		(cd $$subdir && $(MAKE) $@) || exit 1; \
 	done
+
+clean distclean:
+	@for subdir in $(SUBDIRS); do \
+		(cd $$subdir && $(MAKE) $@) || exit 1; \
+	done
+	$(MAKE) -C fuzz clean
+
+.PHONY: fuzz
+fuzz: all
+	$(MAKE) -C fuzz
 
 swigify: all
 	$(MAKE) -C src $@

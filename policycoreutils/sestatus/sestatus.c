@@ -21,11 +21,16 @@
 
 #define PROC_BASE "/proc"
 #define MAX_CHECK 50
-#define CONF "/etc/sestatus.conf"
+#define CONFDIR "/etc"
+#define CONFNAME "sestatus"
+#define CONFPOST "conf"
+#define CONF CONFDIR "/" CONFNAME "." CONFPOST
 
 /* conf file sections */
-#define PROCS "[process]"
-#define FILES "[files]"
+#define SECTIONPROCS "process"
+#define SECTIONFILES "files"
+#define PROCS "[" SECTIONPROCS "]"
+#define FILES "[" SECTIONFILES "]"
 
 /* buffer size for cmp_cmdline */
 #define BUFSIZE 255
@@ -37,7 +42,6 @@ extern char *selinux_mnt;
 
 static int cmp_cmdline(const char *command, int pid)
 {
-
 	char buf[BUFSIZE];
 	char filename[BUFSIZE];
 
@@ -61,7 +65,7 @@ static int cmp_cmdline(const char *command, int pid)
 
 static int pidof(const char *command)
 {
-/* inspired by killall5.c from psmisc */
+	/* inspired by killall5.c from psmisc */
 	char stackpath[PATH_MAX + 1], *p;
 	DIR *dir;
 	struct dirent *de;
@@ -92,9 +96,68 @@ static int pidof(const char *command)
 	return ret;
 }
 
+#ifdef VENDORDIR
+#include <libeconf.h>
+
+static void load_checks_with_vendor_settings(char *pc[], int *npc, char *fc[],
+					     int *nfc)
+{
+	econf_file *key_file = NULL;
+	econf_err error;
+	char **keys;
+	size_t key_number;
+
+	error = econf_readDirs(&key_file, VENDORDIR, CONFDIR, CONFNAME,
+			       CONFPOST, "", "#");
+	if (error != ECONF_SUCCESS) {
+		printf("\nCannot read settings %s.%s: %s\n", CONFNAME, CONFPOST,
+		       econf_errString(error));
+		return;
+	}
+
+	error = econf_getKeys(key_file, SECTIONPROCS, &key_number, &keys);
+	if (error != ECONF_SUCCESS) {
+		printf("\nCannot read group %s: %s\n", SECTIONPROCS,
+		       econf_errString(error));
+	} else {
+		for (size_t i = 0; i < key_number; i++) {
+			if (*npc >= MAX_CHECK)
+				break;
+			pc[*npc] = strdup(keys[i]);
+			if (!pc[*npc])
+				break;
+			(*npc)++;
+		}
+		econf_free(keys);
+	}
+
+	error = econf_getKeys(key_file, SECTIONFILES, &key_number, &keys);
+	if (error != ECONF_SUCCESS) {
+		printf("\nCannot read group %s: %s\n", SECTIONFILES,
+		       econf_errString(error));
+	} else {
+		for (size_t i = 0; i < key_number; i++) {
+			if (*nfc >= MAX_CHECK)
+				break;
+			fc[*nfc] = strdup(keys[i]);
+			if (!fc[*nfc])
+				break;
+			(*nfc)++;
+		}
+		econf_free(keys);
+	}
+
+	econf_free(key_file);
+	return;
+}
+#endif
+
 static void load_checks(char *pc[], int *npc, char *fc[], int *nfc)
 {
-
+#ifdef VENDORDIR
+	load_checks_with_vendor_settings(pc, npc, fc, nfc);
+	return;
+#endif
 	FILE *fp = fopen(CONF, "r");
 	char buf[255], *bufp;
 	int buf_len, section = -1;
@@ -102,7 +165,7 @@ static void load_checks(char *pc[], int *npc, char *fc[], int *nfc)
 	int filelen = strlen(FILES);
 
 	if (fp == NULL) {
-		printf("\nUnable to open %s.\n", CONF);
+		fprintf(stderr, "\nUnable to open %s.\n", CONF);
 		return;
 	}
 
@@ -112,7 +175,7 @@ static void load_checks(char *pc[], int *npc, char *fc[], int *nfc)
 
 		buf_len = strlen(buf);
 		if (buf[buf_len - 1] == '\n')
-			buf[buf_len - 1] = 0;
+			buf[buf_len - 1] = '\0';
 
 		bufp = buf;
 		while (*bufp && isspace(*bufp)) {
@@ -137,37 +200,38 @@ static void load_checks(char *pc[], int *npc, char *fc[], int *nfc)
 				case 0:
 					if (*npc >= MAX_CHECK)
 						break;
-					pc[*npc] =
-					    (char *)malloc((buf_len) *
-							   sizeof(char));
+					pc[*npc] = (char *)malloc(
+						(buf_len + 1) * sizeof(char));
 					if (!pc[*npc])
 						break;
 					memcpy(pc[*npc], bufp, buf_len);
+					pc[*npc][buf_len] = '\0';
 					(*npc)++;
 					bufp = NULL;
 					break;
 				case 1:
 					if (*nfc >= MAX_CHECK)
 						break;
-					fc[*nfc] =
-					    (char *)malloc((buf_len) *
-							   sizeof(char));
+					fc[*nfc] = (char *)malloc(
+						(buf_len + 1) * sizeof(char));
 					if (!fc[*nfc])
 						break;
 					memcpy(fc[*nfc], bufp, buf_len);
+					fc[*nfc][buf_len] = '\0';
 					(*nfc)++;
 					bufp = NULL;
 					break;
 				default:
 					/* ignore lines before a section */
-					printf("Line not in a section: %s.\n",
-					       buf);
+					fprintf(stderr,
+						"Line not in a section: %s.\n",
+						buf);
 					break;
 				}
 			}
 		}
 	}
-      out:
+out:
 	fclose(fp);
 	return;
 }
@@ -175,7 +239,6 @@ static void load_checks(char *pc[], int *npc, char *fc[], int *nfc)
 static void printf_tab(const char *outp)
 {
 	printf("%-*s", COL, outp);
-
 }
 
 int main(int argc, char **argv)
@@ -204,7 +267,6 @@ int main(int argc, char **argv)
 	/* policy */
 	const char *pol_name, *root_dir;
 	char *pol_path;
-
 
 	while (1) {
 		opt = getopt(argc, argv, "vb");
@@ -238,7 +300,7 @@ int main(int argc, char **argv)
 		return 0;
 		break;
 	default:
-		printf("unknown (%s)\n", strerror(errno));
+		fprintf(stderr, "unknown (%s)\n", strerror(errno));
 		return 0;
 		break;
 	}
@@ -255,13 +317,13 @@ int main(int argc, char **argv)
 	printf_tab("SELinux root directory:");
 	root_dir = selinux_path();
 	if (root_dir == NULL) {
-		printf("error (%s)\n", strerror(errno));
+		fprintf(stderr, "error (%s)\n", strerror(errno));
 		return -1;
 	}
 	/* The path has a trailing '/' so duplicate to edit */
 	root_path = strdup(root_dir);
 	if (!root_path) {
-		printf("malloc error (%s)\n", strerror(errno));
+		fprintf(stderr, "malloc error (%s)\n", strerror(errno));
 		return -1;
 	}
 	/* actually blank the '/' */
@@ -277,7 +339,7 @@ int main(int argc, char **argv)
 		puts(pol_name);
 		free(pol_path);
 	} else {
-		printf("error (%s)\n", strerror(errno));
+		fprintf(stderr, "error (%s)\n", strerror(errno));
 	}
 
 	printf_tab("Current mode:");
@@ -290,7 +352,7 @@ int main(int argc, char **argv)
 		printf("permissive\n");
 		break;
 	default:
-		printf("unknown (%s)\n", strerror(errno));
+		fprintf(stderr, "unknown (%s)\n", strerror(errno));
 		break;
 	}
 
@@ -308,58 +370,57 @@ int main(int argc, char **argv)
 			break;
 		}
 	} else {
-		printf("error (%s)\n", strerror(errno));
+		fprintf(stderr, "error (%s)\n", strerror(errno));
 	}
 
 	printf_tab("Policy MLS status:");
 	rc = is_selinux_mls_enabled();
 	switch (rc) {
-		case 0:
-			printf("disabled\n");
-			break;
-		case 1:
-			printf("enabled\n");
-			break;
-		default:
-			printf("error (%s)\n", strerror(errno));
-			break;
+	case 0:
+		printf("disabled\n");
+		break;
+	case 1:
+		printf("enabled\n");
+		break;
+	default:
+		fprintf(stderr, "error (%s)\n", strerror(errno));
+		break;
 	}
 
 	printf_tab("Policy deny_unknown status:");
 	rc = security_deny_unknown();
 	switch (rc) {
-		case 0:
-			printf("allowed\n");
-			break;
-		case 1:
-			printf("denied\n");
-			break;
-		default:
-			printf("error (%s)\n", strerror(errno));
-			break;
+	case 0:
+		printf("allowed\n");
+		break;
+	case 1:
+		printf("denied\n");
+		break;
+	default:
+		fprintf(stderr, "error (%s)\n", strerror(errno));
+		break;
 	}
 
 	printf_tab("Memory protection checking:");
 	rc = security_get_checkreqprot();
 	switch (rc) {
-		case 0:
-			printf("actual (secure)\n");
-			break;
-		case 1:
-			printf("requested (insecure)\n");
-			break;
-		default:
-			printf("error (%s)\n", strerror(errno));
-			break;
+	case 0:
+		printf("actual (secure)\n");
+		break;
+	case 1:
+		printf("requested (insecure)\n");
+		break;
+	default:
+		fprintf(stderr, "error (%s)\n", strerror(errno));
+		break;
 	}
 
 	rc = security_policyvers();
 	printf_tab("Max kernel policy version:");
 	if (rc < 0)
-		printf("unknown (%s)\n", strerror(errno));
+		fprintf(stderr, "unknown (%s)\n", strerror(errno));
 	else
 		printf("%d\n", rc);
-
 
 	if (show_bools) {
 		/* show booleans */
@@ -382,7 +443,8 @@ int main(int argc, char **argv)
 					printf("off");
 					break;
 				default:
-					printf("unknown (%s)", strerror(errno));
+					fprintf(stderr, "unknown (%s)",
+						strerror(errno));
 					break;
 				}
 				c = security_get_boolean_pending(bools[i]);
@@ -395,8 +457,9 @@ int main(int argc, char **argv)
 						printf(" (inactivate pending)");
 						break;
 					default:
-						printf(" (pending error: %s)",
-						       strerror(errno));
+						fprintf(stderr,
+							" (pending error: %s)",
+							strerror(errno));
 						break;
 					}
 				printf("\n");
@@ -420,14 +483,14 @@ int main(int argc, char **argv)
 		printf("%s\n", context);
 		freecon(context);
 	} else
-		printf("unknown (%s)\n", strerror(errno));
+		fprintf(stderr, "unknown (%s)\n", strerror(errno));
 
 	printf_tab("Init context:");
 	if (getpidcon(1, &context) >= 0) {
 		printf("%s\n", context);
 		freecon(context);
 	} else
-		printf("unknown (%s)\n", strerror(errno));
+		fprintf(stderr, "unknown (%s)\n", strerror(errno));
 
 	for (i = 0; i < npc; i++) {
 		rc = pidof(pc[i]);
@@ -450,7 +513,7 @@ int main(int argc, char **argv)
 		printf("%s\n", context);
 		freecon(context);
 	} else {
-		printf("unknown (%s)\n", strerror(errno));
+		fprintf(stderr, "unknown (%s)\n", strerror(errno));
 	}
 
 	for (i = 0; i < nfc; i++) {
@@ -459,9 +522,9 @@ int main(int argc, char **argv)
 
 			/* check if this is a symlink */
 			if (lstat(fc[i], &m)) {
-				printf
-				    ("%s (could not check link status (%s)!)\n",
-				     context, strerror(errno));
+				fprintf(stderr,
+					"%s (could not check link status (%s)!)\n",
+					context, strerror(errno));
 				freecon(context);
 				free(fc[i]);
 				continue;
@@ -475,8 +538,8 @@ int main(int argc, char **argv)
 					printf("%s\n", context);
 					freecon(context);
 				} else {
-					printf("unknown (%s)\n",
-					       strerror(errno));
+					fprintf(stderr, "unknown (%s)\n",
+						strerror(errno));
 				}
 			} else {
 				printf("%s\n", context);

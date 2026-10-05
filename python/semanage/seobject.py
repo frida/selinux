@@ -106,9 +106,12 @@ try:
     audit.audit_close(audit.audit_open())
 
     class logger:
+        audit_fd = None
 
         def __init__(self):
-            self.audit_fd = audit.audit_open()
+            if logger.audit_fd is None:
+                logger.audit_fd = audit.audit_open()
+
             self.log_list = []
             self.log_change_list = []
 
@@ -1040,10 +1043,12 @@ class seluserRecords(semanageRecords):
         l = []
         ddict = self.get_all(True)
         for k in sorted(ddict.keys()):
-            if ddict[k][1] or ddict[k][2]:
-                l.append("-a -L %s -r %s -R '%s' %s" % (ddict[k][1], ddict[k][2], ddict[k][3], k))
+            prefix, level, srange, roles = ddict[k]
+            popt = "-P %s " % prefix if prefix and prefix != "user" else ""
+            if level or srange:
+                l.append("-a %s-L %s -r %s -R '%s' %s" % (popt, level, srange, roles, k))
             else:
-                l.append("-a -R '%s' %s" % (ddict[k][3], k))
+                l.append("-a %s-R '%s' %s" % (popt, roles, k))
         return l
 
     def list(self, heading=1, locallist=0):
@@ -1100,7 +1105,7 @@ class portRecords(semanageRecords):
             low = int(ports[0])
             high = int(ports[1])
 
-        if high > 65535:
+        if low < 1 or low > high or high > 65535:
             raise ValueError(_("Invalid Port"))
 
         (rc, k) = semanage_port_key_create(self.sh, low, high, proto_d)
@@ -2370,7 +2375,7 @@ class fcontextRecords(semanageRecords):
         self.equiv_dist = {}
         self.equal_ind = False
         try:
-            fd = open(selinux.selinux_file_context_subs_path(), "r")
+            fd = selinux.policy_open(selinux.selinux_file_context_subs_path())
             for i in fd.readlines():
                 i = i.strip()
                 if len(i) == 0:
@@ -2383,7 +2388,7 @@ class fcontextRecords(semanageRecords):
         except IOError:
             pass
         try:
-            fd = open(selinux.selinux_file_context_subs_dist_path(), "r")
+            fd = selinux.policy_open(selinux.selinux_file_context_subs_dist_path())
             for i in fd.readlines():
                 i = i.strip()
                 if len(i) == 0:

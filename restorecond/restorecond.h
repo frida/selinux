@@ -24,9 +24,11 @@
 #ifndef RESTORED_CONFIG_H
 #define RESTORED_CONFIG_H
 
+#include <signal.h>
+
 extern int debug_mode;
 extern const char *homedir;
-extern int terminate;
+extern volatile sig_atomic_t terminate;
 extern int master_wd;
 extern int run_as_user;
 
@@ -34,7 +36,7 @@ extern int start(void);
 extern int server(int, const char *watch_file);
 
 extern void exitApp(const char *msg) __attribute__((__noreturn__));
-extern void read_config(int fd,	const char *watch_file);
+extern void read_config(int fd, const char *watch_file);
 
 extern int watch(int fd, const char *watch_file);
 extern void watch_list_add(int inotify_fd, const char *path);

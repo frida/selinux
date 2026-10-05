@@ -66,7 +66,7 @@ int main(int argc, char *argv[])
 	FILE *file = NULL;
 	char *buffer = NULL;
 	struct stat filedata;
-	uint32_t file_size;
+	size_t file_size;
 	char *output = NULL;
 	struct cil_db *db = NULL;
 	int mls = -1;
@@ -76,51 +76,54 @@ int main(int argc, char *argv[])
 	int opt_index = 0;
 	enum cil_log_level log_level = CIL_ERR;
 	static struct option long_opts[] = {
-		{"help", no_argument, 0, 'h'},
-		{"verbose", no_argument, 0, 'v'},
-		{"mls", required_argument, 0, 'M'},
-		{"preserve-tunables", no_argument, 0, 'P'},
-		{"qualified-names", no_argument, 0, 'Q'},
-		{"output", required_argument, 0, 'o'},
-		{0, 0, 0, 0}
+		{ "help", no_argument, NULL, 'h' },
+		{ "verbose", no_argument, NULL, 'v' },
+		{ "mls", required_argument, NULL, 'M' },
+		{ "preserve-tunables", no_argument, NULL, 'P' },
+		{ "qualified-names", no_argument, NULL, 'Q' },
+		{ "output", required_argument, NULL, 'o' },
+		{ NULL, 0, NULL, 0 }
 	};
 	int i;
 
 	while (1) {
-		opt_char = getopt_long(argc, argv, "o:hvM:PQ", long_opts, &opt_index);
+		opt_char = getopt_long(argc, argv, "o:hvM:PQ", long_opts,
+				       &opt_index);
 		if (opt_char == -1) {
 			break;
 		}
 		switch (opt_char) {
-			case 'v':
-				log_level++;
-				break;
-			case 'M':
-				if (!strcasecmp(optarg, "true") || !strcasecmp(optarg, "1")) {
-					mls = 1;
-				} else if (!strcasecmp(optarg, "false") || !strcasecmp(optarg, "0")) {
-					mls = 0;
-				} else {
-					usage(argv[0]);
-				}
-				break;
-			case 'P':
-				preserve_tunables = 1;
-				break;
-			case 'Q':
-				qualified_names = 1;
-				break;
-			case 'o':
-				free(output);
-				output = strdup(optarg);
-				break;
-			case 'h':
+		case 'v':
+			log_level++;
+			break;
+		case 'M':
+			if (!strcasecmp(optarg, "true") ||
+			    !strcasecmp(optarg, "1")) {
+				mls = 1;
+			} else if (!strcasecmp(optarg, "false") ||
+				   !strcasecmp(optarg, "0")) {
+				mls = 0;
+			} else {
 				usage(argv[0]);
-			case '?':
-				break;
-			default:
-					fprintf(stderr, "Unsupported option: %s\n", optarg);
-				usage(argv[0]);
+			}
+			break;
+		case 'P':
+			preserve_tunables = 1;
+			break;
+		case 'Q':
+			qualified_names = 1;
+			break;
+		case 'o':
+			free(output);
+			output = strdup(optarg);
+			break;
+		case 'h':
+			usage(argv[0]);
+		case '?':
+			break;
+		default:
+			fprintf(stderr, "Unsupported option: %s\n", optarg);
+			usage(argv[0]);
 		}
 	}
 	if (optind >= argc) {
@@ -144,7 +147,7 @@ int main(int argc, char *argv[])
 			rc = SEPOL_ERR;
 			goto exit;
 		}
-		rc = stat(argv[i], &filedata);
+		rc = fstat(fileno(file), &filedata);
 		if (rc == -1) {
 			fprintf(stderr, "Could not stat file: %s\n", argv[i]);
 			goto exit;
@@ -188,7 +191,8 @@ int main(int argc, char *argv[])
 		file = fopen(output, "w");
 	}
 	if (file == NULL) {
-		fprintf(stderr, "Failure opening policy.conf file for writing\n");
+		fprintf(stderr,
+			"Failure opening policy.conf file for writing\n");
 		rc = SEPOL_ERR;
 		goto exit;
 	}

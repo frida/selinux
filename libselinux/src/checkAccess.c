@@ -9,17 +9,18 @@
 
 static pthread_once_t once = PTHREAD_ONCE_INIT;
 static int selinux_enabled;
+static int avc_ok;
 
 static void avc_init_once(void)
 {
 	selinux_enabled = is_selinux_enabled();
-	if (selinux_enabled == 1) {
-		if (avc_open(NULL, 0))
-			return;
-	}
+	if (selinux_enabled == 1 && avc_open(NULL, 0) == 0)
+		avc_ok = 1;
 }
 
-int selinux_check_access(const char *scon, const char *tcon, const char *class, const char *perm, void *aux) {
+int selinux_check_access(const char *scon, const char *tcon, const char *class,
+			 const char *perm, void *aux)
+{
 	int rc;
 	security_id_t scon_id;
 	security_id_t tcon_id;
@@ -31,6 +32,11 @@ int selinux_check_access(const char *scon, const char *tcon, const char *class, 
 	if (selinux_enabled != 1)
 		return 0;
 
+	if (!avc_ok) {
+		errno = EINVAL;
+		return -1;
+	}
+
 	rc = avc_context_to_sid(scon, &scon_id);
 	if (rc < 0)
 		return rc;
@@ -39,29 +45,30 @@ int selinux_check_access(const char *scon, const char *tcon, const char *class, 
 	if (rc < 0)
 		return rc;
 
-	(void) selinux_status_updated();
+	(void)selinux_status_updated();
 
-       sclass = string_to_security_class(class);
-       if (sclass == 0) {
-	       rc = errno;
-	       avc_log(SELINUX_ERROR, "Unknown class %s", class);
-	       if (security_deny_unknown() == 0)
-		       return 0;
-	       errno = rc;
-	       return -1;
-       }
+	sclass = string_to_security_class(class);
+	if (sclass == 0) {
+		rc = errno;
+		avc_log(SELINUX_ERROR, "Unknown class %s", class);
+		if (security_deny_unknown() == 0)
+			return 0;
+		errno = rc;
+		return -1;
+	}
 
-       av = string_to_av_perm(sclass, perm);
-       if (av == 0) {
-	       rc = errno;
-	       avc_log(SELINUX_ERROR, "Unknown permission %s for class %s", perm, class);
-	       if (security_deny_unknown() == 0)
-		       return 0;
-	       errno = rc;
-	       return -1;
-       }
+	av = string_to_av_perm(sclass, perm);
+	if (av == 0) {
+		rc = errno;
+		avc_log(SELINUX_ERROR, "Unknown permission %s for class %s",
+			perm, class);
+		if (security_deny_unknown() == 0)
+			return 0;
+		errno = rc;
+		return -1;
+	}
 
-       return avc_has_perm (scon_id, tcon_id, sclass, av, NULL, aux);
+	return avc_has_perm(scon_id, tcon_id, sclass, av, NULL, aux);
 }
 
 static int selinux_check_passwd_access_internal(access_vector_t requested)
@@ -83,11 +90,8 @@ static int selinux_check_passwd_access_internal(access_vector_t requested)
 			return -1;
 		}
 
-		retval = security_compute_av_raw(user_context,
-						     user_context,
-						     passwd_class,
-						     requested,
-						     &avd);
+		retval = security_compute_av_raw(user_context, user_context,
+						 passwd_class, requested, &avd);
 
 		if ((retval == 0) && ((requested & avd.allowed) == requested)) {
 			status = 0;
@@ -101,7 +105,8 @@ static int selinux_check_passwd_access_internal(access_vector_t requested)
 	return status;
 }
 
-int selinux_check_passwd_access(access_vector_t requested) {
+int selinux_check_passwd_access(access_vector_t requested)
+{
 	return selinux_check_passwd_access_internal(requested);
 }
 

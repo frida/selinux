@@ -17,10 +17,12 @@
 #include <values.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdio_ext.h>
+#include <stdint.h>
 #include <ctype.h>
 #include <selinux/selinux.h>
 #include <selinux/context.h>
@@ -31,21 +33,26 @@
 #include <time.h>
 #include <sys/time.h>
 
-
 #include "mls_level.h"
 #include "mcstrans.h"
 
 #define N_BUCKETS 1453
+#define CACHE_MAX_ENTRIES 65536
 
 #define log_error(fmt, ...) fprintf(stderr, fmt, __VA_ARGS__)
 
 #ifdef DEBUG
 #define log_debug(fmt, ...) fprintf(stderr, fmt, __VA_ARGS__)
 #else
-#define log_debug(fmt, ...) do {} while (0)
+#define log_debug(fmt, ...) \
+	do {                \
+	} while (0)
 #endif
 
-static unsigned int maxbit=0;
+#ifndef MAX_CATS
+#define MAX_CATS 1024
+#endif
+static unsigned int maxbit = 0;
 
 /* Define data structures */
 typedef struct context_map {
@@ -102,6 +109,7 @@ typedef struct base_classification {
 typedef struct domain {
 	char *name;
 
+	unsigned int cache_entries;
 	context_map_node_t *raw_to_trans[N_BUCKETS];
 	context_map_node_t *trans_to_raw[N_BUCKETS];
 
@@ -135,8 +143,8 @@ typedef struct cat_constraint {
 
 static cat_constraint_t *cat_constraints;
 
-static unsigned int
-hash(const char *str) {
+static unsigned int hash(const char *str)
+{
 	unsigned int hash = 5381;
 	int c;
 
@@ -146,14 +154,15 @@ hash(const char *str) {
 	return hash;
 }
 
-static int
-add_to_hashtable(context_map_node_t **table, char *key, context_map_t *map) {
+static int add_to_hashtable(context_map_node_t **table, char *key,
+			    context_map_t *map)
+{
 	unsigned int bucket = hash(key) % N_BUCKETS;
 	context_map_node_t **n;
 	for (n = &table[bucket]; *n; n = &(*n)->next)
 		;
 	*n = malloc(sizeof(context_map_node_t));
-	if (! *n)
+	if (!*n)
 		goto err;
 	(*n)->key = key;
 	(*n)->map = map;
@@ -164,42 +173,43 @@ err:
 	return -1;
 }
 
-static int
-numdigits(unsigned int n)
-{
-	int count = 1;
-	while ((n = n / 10))
-		count++;
-	return count;
-}
-
-static int
-parse_category(ebitmap_t *e, const char *raw, int allowinverse)
+static int parse_category(ebitmap_t *e, const char *raw, bool allowinverse,
+			  bool fromconfig)
 {
 	int inverse = 0;
 	unsigned int low, high;
 	while (*raw) {
+		int n = 0;
 		if (allowinverse && *raw == '~') {
 			inverse = !inverse;
 			raw++;
 			continue;
 		}
-		if (sscanf(raw,"c%u", &low) != 1)
+		if (sscanf(raw, "c%u%n", &low, &n) != 1)
 			return -1;
-		raw += numdigits(low) + 1;
+		if (low >= MAX_CATS)
+			return -1;
+		if (!fromconfig && low >= maxbit)
+			return -1;
+		raw += n;
 		if (*raw == '.') {
 			raw++;
-			if (sscanf(raw,"c%u", &high) != 1)
+			n = 0;
+			if (sscanf(raw, "c%u%n", &high, &n) != 1)
 				return -1;
-			raw += numdigits(high) + 1;
+			if (high >= MAX_CATS)
+				return -1;
+			if (!fromconfig && high >= maxbit)
+				return -1;
+			raw += n;
 		} else {
 			high = low;
 		}
 		while (low <= high) {
-			if (low >= maxbit)
-				maxbit = low + 1;
 			if (ebitmap_set_bit(e, low, inverse ? 0 : 1) < 0)
 				return -1;
+			if (fromconfig && low >= maxbit)
+				maxbit = low + 1;
 			low++;
 		}
 		if (*raw == ',') {
@@ -212,28 +222,29 @@ parse_category(ebitmap_t *e, const char *raw, int allowinverse)
 	return 0;
 }
 
-static int
-parse_ebitmap(ebitmap_t *e, ebitmap_t *def, const char *raw) {
+static int parse_ebitmap(ebitmap_t *e, ebitmap_t *def, const char *raw)
+{
 	int rc = ebitmap_cpy(e, def);
 	if (rc < 0)
 		return rc;
-	rc = parse_category(e, raw, 1);
+	rc = parse_category(e, raw, true, true);
 	if (rc < 0)
 		return rc;
 	return 0;
 }
 
-static mls_level_t *
-parse_raw(const char *raw) {
+static mls_level_t *parse_raw(const char *raw, bool fromconfig)
+{
 	mls_level_t *mls = calloc(1, sizeof(mls_level_t));
+	int n = 0;
 	if (!mls)
+		return NULL;
+	if (sscanf(raw, "s%u%n", &mls->sens, &n) != 1)
 		goto err;
-	if (sscanf(raw,"s%u", &mls->sens) != 1)
-		goto err;
-	raw += numdigits(mls->sens) + 1;
+	raw += n;
 	if (*raw == ':') {
 		raw++;
-		if (parse_category(&mls->cat, raw, 0) < 0)
+		if (parse_category(&mls->cat, raw, false, fromconfig) < 0)
 			goto err;
 	} else if (*raw != '\0') {
 		goto err;
@@ -247,8 +258,8 @@ err:
 	return NULL;
 }
 
-static void
-destroy_word(word_t **list, word_t *word) {
+static void destroy_word(word_t **list, word_t *word)
+{
 	if (!word) {
 		return;
 	}
@@ -266,8 +277,8 @@ destroy_word(word_t **list, word_t *word) {
 	free(word);
 }
 
-static word_t *
-create_word(word_t **list, const char *text) {
+static word_t *create_word(word_t **list, const char *text)
+{
 	word_t *w = calloc(1, sizeof(word_t));
 	if (!w) {
 		goto err;
@@ -290,27 +301,27 @@ err:
 	return NULL;
 }
 
-static void
-destroy_group(word_group_t **list, word_group_t *group) {
+static void destroy_group(word_group_t **list, word_group_t *group)
+{
 	for (; list && *list; list = &(*list)->next) {
 		if (*list == group) {
 			*list = group->next;
 			break;
 		}
 	}
-	while(group->prefixes) {
+	while (group->prefixes) {
 		affix_t *next = group->prefixes->next;
 		free(group->prefixes->text);
 		free(group->prefixes);
-		group->prefixes=next;
+		group->prefixes = next;
 	}
-	while(group->suffixes) {
+	while (group->suffixes) {
 		affix_t *next = group->suffixes->next;
 		free(group->suffixes->text);
 		free(group->suffixes);
-		group->suffixes=next;
+		group->suffixes = next;
 	}
-	while(group->words)
+	while (group->words)
 		destroy_word(&group->words, group->words);
 	free(group->whitespace);
 	free(group->name);
@@ -323,8 +334,8 @@ destroy_group(word_group_t **list, word_group_t *group) {
 	free(group);
 }
 
-static word_group_t *
-create_group(word_group_t **list, const char *name) {
+static word_group_t *create_group(word_group_t **list, const char *name)
+{
 	word_group_t *group = calloc(1, sizeof(word_group_t));
 	if (!group)
 		return NULL;
@@ -356,13 +367,17 @@ err:
 	return NULL;
 }
 
-static void
-destroy_domain(domain_t *domain) {
+static void destroy_domain(domain_t *domain)
+{
 	int i;
-        unsigned int rt = 0, tr = 0;
-	for (i=0; i < N_BUCKETS; i++) {
+	unsigned int rt = 0, tr = 0;
+
+	if (!domain)
+		return;
+
+	for (i = 0; i < N_BUCKETS; i++) {
 		context_map_node_t *ptr;
-		for (ptr = domain->trans_to_raw[i]; ptr;)  {
+		for (ptr = domain->trans_to_raw[i]; ptr;) {
 			context_map_node_t *t = ptr->next;
 			free(ptr);
 			ptr = t;
@@ -370,9 +385,9 @@ destroy_domain(domain_t *domain) {
 		}
 		domain->trans_to_raw[i] = NULL;
 	}
-	for (i=0; i < N_BUCKETS; i++) {
+	for (i = 0; i < N_BUCKETS; i++) {
 		context_map_node_t *ptr;
-		for (ptr = domain->raw_to_trans[i]; ptr;)  {
+		for (ptr = domain->raw_to_trans[i]; ptr;) {
 			context_map_node_t *t = ptr->next;
 			free(ptr->map->raw);
 			free(ptr->map->trans);
@@ -383,8 +398,9 @@ destroy_domain(domain_t *domain) {
 		}
 		domain->raw_to_trans[i] = NULL;
 	}
-	while (domain->base_classifications)  {
-		base_classification_t *next = domain->base_classifications->next;
+	while (domain->base_classifications) {
+		base_classification_t *next =
+			domain->base_classifications->next;
 		free(domain->base_classifications->trans);
 		ebitmap_destroy(&domain->base_classifications->level->cat);
 		free(domain->base_classifications->level);
@@ -400,8 +416,8 @@ destroy_domain(domain_t *domain) {
 	syslog(LOG_INFO, "cache sizes: tr = %u, rt = %u", tr, rt);
 }
 
-static domain_t *
-create_domain(const char *name) {
+static domain_t *create_domain(const char *name)
+{
 	domain_t *domain = calloc(1, sizeof(domain_t));
 	if (!domain) {
 		goto err;
@@ -424,13 +440,17 @@ err:
 	return NULL;
 }
 
-static int
-add_word(word_group_t *group, char *raw, char *trans) {
-	if (strchr(trans,'-')) {
-		log_error("'%s'is invalid because '-' is illegal in modifiers.\n", trans);
+static int add_word(word_group_t *group, char *raw, char *trans)
+{
+	if (strchr(trans, '-')) {
+		log_error(
+			"'%s'is invalid because '-' is illegal in modifiers.\n",
+			trans);
 		return -1;
 	}
 	word_t *word = create_word(&group->words, trans);
+	if (!word)
+		return -1;
 	int rc = parse_ebitmap(&word->cat, &group->def, raw);
 	if (rc < 0) {
 		log_error(" syntax error in %s\n", raw);
@@ -450,8 +470,8 @@ add_word(word_group_t *group, char *raw, char *trans) {
 	return 0;
 }
 
-static int
-add_constraint(char op, char *raw, char *tok) {
+static int add_constraint(char op, char *raw, char *tok)
+{
 	log_debug("%s\n", "add_constraint");
 	ebitmap_t empty;
 	ebitmap_init(&empty);
@@ -460,12 +480,13 @@ add_constraint(char op, char *raw, char *tok) {
 		return -1;
 	}
 	if (*raw == 's') {
-		sens_constraint_t *constraint = calloc(1, sizeof(sens_constraint_t));
+		sens_constraint_t *constraint =
+			calloc(1, sizeof(sens_constraint_t));
 		if (!constraint) {
 			log_error("allocation error %s", strerror(errno));
 			return -1;
 		}
-		if (sscanf(raw,"s%u", &constraint->sens) != 1) {
+		if (sscanf(raw, "s%u", &constraint->sens) != 1) {
 			syslog(LOG_ERR, "unable to parse level");
 			free(constraint);
 			return -1;
@@ -477,17 +498,19 @@ add_constraint(char op, char *raw, char *tok) {
 		}
 		if (asprintf(&constraint->text, "%s%c%s", raw, op, tok) < 0) {
 			log_error("asprintf failed %s", strerror(errno));
+			ebitmap_destroy(&constraint->cat);
 			free(constraint);
 			return -1;
 		}
 		constraint->op = op;
 		sens_constraint_t **p;
-		for (p= &sens_constraints; *p; p = &(*p)->next)
-                        ;
-                *p = constraint;
+		for (p = &sens_constraints; *p; p = &(*p)->next)
+			;
+		*p = constraint;
 		return 0;
-	} else if (*raw == 'c' ) {
-		cat_constraint_t *constraint = calloc(1, sizeof(cat_constraint_t));
+	} else if (*raw == 'c') {
+		cat_constraint_t *constraint =
+			calloc(1, sizeof(cat_constraint_t));
 		if (!constraint) {
 			log_error("allocation error %s", strerror(errno));
 			return -1;
@@ -505,28 +528,31 @@ add_constraint(char op, char *raw, char *tok) {
 		}
 		if (asprintf(&constraint->text, "%s%c%s", raw, op, tok) < 0) {
 			log_error("asprintf failed %s", strerror(errno));
+			ebitmap_destroy(&constraint->mask);
+			ebitmap_destroy(&constraint->cat);
+			free(constraint);
 			return -1;
 		}
 		constraint->nbits = ebitmap_cardinality(&constraint->cat);
 		constraint->op = op;
 		cat_constraint_t **p;
-		for (p= &cat_constraints; *p; p = &(*p)->next)
-                        ;
-                *p = constraint;
+		for (p = &cat_constraints; *p; p = &(*p)->next)
+			;
+		*p = constraint;
 		return 0;
 	} else {
 		return -1;
 	}
-	
+
 	return 0;
 }
 
-static int
-violates_constraints(mls_level_t *l) {
+static int violates_constraints(mls_level_t *l)
+{
 	int nbits;
 	sens_constraint_t *s;
 	ebitmap_t common;
-	for (s=sens_constraints; s; s=s->next) {
+	for (s = sens_constraints; s; s = s->next) {
 		if (s->sens == l->sens) {
 			if (ebitmap_and(&common, &s->cat, &l->cat) < 0)
 				return 1;
@@ -534,14 +560,15 @@ violates_constraints(mls_level_t *l) {
 			ebitmap_destroy(&common);
 			if (nbits) {
 				char *text = mls_level_to_string(l);
-				syslog(LOG_WARNING, "%s violates %s", text, s->text);
+				syslog(LOG_WARNING, "%s violates %s", text,
+				       s->text);
 				free(text);
 				return 1;
 			}
 		}
 	}
 	cat_constraint_t *c;
-	for (c=cat_constraints; c; c=c->next) {
+	for (c = cat_constraints; c; c = c->next) {
 		if (ebitmap_and(&common, &c->mask, &l->cat) < 0)
 			return 1;
 		nbits = ebitmap_cardinality(&common);
@@ -554,7 +581,8 @@ violates_constraints(mls_level_t *l) {
 			if ((c->op == '!' && nbits) ||
 			    (c->op == '>' && nbits != c->nbits)) {
 				char *text = mls_level_to_string(l);
-				syslog(LOG_WARNING, "%s violates %s (%d,%d)", text, c->text, nbits, c->nbits);
+				syslog(LOG_WARNING, "%s violates %s (%d,%d)",
+				       text, c->text, nbits, c->nbits);
 				free(text);
 				return 1;
 			}
@@ -563,8 +591,9 @@ violates_constraints(mls_level_t *l) {
 	return 0;
 }
 
-static void
-destroy_sens_constraint(sens_constraint_t **list, sens_constraint_t *constraint) {
+static void destroy_sens_constraint(sens_constraint_t **list,
+				    sens_constraint_t *constraint)
+{
 	if (!constraint) {
 		return;
 	}
@@ -580,8 +609,9 @@ destroy_sens_constraint(sens_constraint_t **list, sens_constraint_t *constraint)
 	free(constraint);
 }
 
-static void
-destroy_cat_constraint(cat_constraint_t **list, cat_constraint_t *constraint) {
+static void destroy_cat_constraint(cat_constraint_t **list,
+				   cat_constraint_t *constraint)
+{
 	if (!constraint) {
 		return;
 	}
@@ -598,38 +628,44 @@ destroy_cat_constraint(cat_constraint_t **list, cat_constraint_t *constraint) {
 	free(constraint);
 }
 
-
-static int
-add_base_classification(domain_t *domain, char *raw, char *trans) {
-	mls_level_t *level = parse_raw(raw);
+static int add_base_classification(domain_t *domain, char *raw, char *trans)
+{
+	mls_level_t *level = parse_raw(raw, true);
 	if (level) {
 		base_classification_t **i;
-		base_classification_t *base_classification = calloc(1, sizeof(base_classification_t));
+		base_classification_t *base_classification =
+			calloc(1, sizeof(base_classification_t));
 		if (!base_classification) {
 			log_error("allocation error %s", strerror(errno));
 			return -1;
 		}
-		base_classification->trans=strdup(trans);
+		base_classification->trans = strdup(trans);
 		if (!base_classification->trans) {
 			log_error("allocation error %s", strerror(errno));
 			free(base_classification);
 			return -1;
 		}
-		base_classification->level=level;
+		base_classification->level = level;
 
-		for (i=&domain->base_classifications; *i; i=&(*i)->next)
-		;
+		for (i = &domain->base_classifications; *i; i = &(*i)->next)
+			;
 		*i = base_classification;
-			return 0;
-		}
+		return 0;
+	}
 	log_error(" add_base_classification error %s %s\n", raw, trans);
 	return -1;
 }
 
-static int
-add_cache(domain_t *domain, char *raw, char *trans) {
-	context_map_t *map = calloc(1, sizeof(context_map_t));
-	if (!map) goto err;
+static int add_cache(domain_t *domain, char *raw, char *trans)
+{
+	context_map_t *map;
+
+	if (domain->cache_entries >= CACHE_MAX_ENTRIES)
+		return 0;
+
+	map = calloc(1, sizeof(context_map_t));
+	if (!map)
+		goto err;
 
 	map->raw = strdup(raw);
 	if (!map->raw) {
@@ -654,14 +690,15 @@ add_cache(domain_t *domain, char *raw, char *trans) {
 	if (add_to_hashtable(domain->trans_to_raw, map->trans, map) < 0)
 		goto err;
 
+	domain->cache_entries++;
 	return 0;
 err:
 	log_error("%s: allocation error", "add_cache");
 	return -1;
 }
 
-static context_map_t *
-find_in_table(context_map_node_t **table, const char *key) {
+static context_map_t *find_in_table(context_map_node_t **table, const char *key)
+{
 	unsigned int bucket = hash(key) % N_BUCKETS;
 	context_map_node_t **n;
 	for (n = &table[bucket]; *n; n = &(*n)->next)
@@ -670,17 +707,17 @@ find_in_table(context_map_node_t **table, const char *key) {
 	return NULL;
 }
 
-static char *
-trim(char *str, const char *whitespace) {
+static char *trim(char *str, const char *whitespace)
+{
 	char *p = str + strlen(str);
 
-	while (p > str && strchr(whitespace, *(p-1)) != NULL)
-		*--p = 0;
+	while (p > str && strchr(whitespace, *(p - 1)) != NULL)
+		*--p = '\0';
 	return str;
 }
 
-static char *
-triml(char *str, const char *whitespace) {
+static char *triml(char *str, const char *whitespace)
+{
 	char *p = str;
 
 	while (*p && (strchr(whitespace, *p) != NULL))
@@ -688,9 +725,9 @@ triml(char *str, const char *whitespace) {
 	return p;
 }
 
-static int
-update(char **p, char *const val) {
-	free (*p);
+static int update(char **p, char *const val)
+{
+	free(*p);
 	*p = strdup(val);
 	if (!*p) {
 		log_error("allocation error %s", strerror(errno));
@@ -699,8 +736,8 @@ update(char **p, char *const val) {
 	return 0;
 }
 
-static int
-append(affix_t **affixes, const char *val) {
+static int append(affix_t **affixes, const char *val)
+{
 	affix_t *affix = calloc(1, sizeof(affix_t));
 	if (!affix) {
 		goto err;
@@ -708,7 +745,7 @@ append(affix_t **affixes, const char *val) {
 	affix->text = strdup(val);
 	if (!affix->text)
 		goto err;
-	for (;*affixes; affixes = &(*affixes)->next)
+	for (; *affixes; affixes = &(*affixes)->next)
 		;
 	*affixes = affix;
 	return 0;
@@ -719,19 +756,20 @@ err:
 	return -1;
 }
 
+static domain_t *parser_domain;
+static word_group_t *group;
+static int base_classification;
+static int lineno = 0;
+
 static int read_translations(const char *filename);
 
 /* Process line from translation file.
    Remove white space and set raw do data before the "=" and tok to data after it
    Modifies the data pointed to by the buffer parameter
  */
-static int
-process_trans(char *buffer) {
-	static domain_t *domain;
-	static word_group_t *group;
-	static int base_classification;
-	static int lineno = 0;
-	char op='\0';
+static int process_trans(char *buffer)
+{
+	char op = '\0';
 
 	lineno++;
 	log_debug("%d: %s", lineno, buffer);
@@ -740,8 +778,9 @@ process_trans(char *buffer) {
 	buffer = triml(buffer, "\t ");
 
 	/* Ignore comments */
-	if (*buffer == '#') return 0;
-	char *comment = strpbrk (buffer, "#");
+	if (*buffer == '#')
+		return 0;
+	char *comment = strpbrk(buffer, "#");
 	if (comment) {
 		*comment = '\0';
 	}
@@ -749,10 +788,11 @@ process_trans(char *buffer) {
 	/* zap trailing whitespace */
 	buffer = trim(buffer, "\t \r\n");
 
-	if (*buffer == 0) return 0;
+	if (*buffer == '\0')
+		return 0;
 
-	char *delim = strpbrk (buffer, "=!>");
-	if (! delim) {
+	char *delim = strpbrk(buffer, "=!>");
+	if (!delim) {
 		syslog(LOG_ERR, "invalid line (no !, = or >) %d", lineno);
 		return -1;
 	}
@@ -760,18 +800,18 @@ process_trans(char *buffer) {
 	op = *delim;
 	*delim = '\0';
 	char *raw = buffer;
-	char *tok = delim+1;
+	char *tok = delim + 1;
 
 	/* remove trailing/leading whitespace from the split tokens */
 	trim(raw, "\t ");
 	tok = triml(tok, "\t ");
 
-	if (! *raw) {
+	if (!*raw) {
 		syslog(LOG_ERR, "invalid line %d", lineno);
 		return -1;
 	}
 
-	if (! *tok) {
+	if (!*tok) {
 		syslog(LOG_ERR, "invalid line %d", lineno);
 		return -1;
 	}
@@ -782,23 +822,26 @@ process_trans(char *buffer) {
 	}
 
 	if (!strcmp(raw, "Domain")) {
-		domain = create_domain(tok);
+		parser_domain = create_domain(tok);
+		if (!parser_domain)
+			return -1;
 		group = NULL;
 		return 0;
 	}
 
-	if (!domain) {
-		domain = create_domain("Default");
-		if (!domain)
+	if (!parser_domain) {
+		parser_domain = create_domain("Default");
+		if (!parser_domain)
 			return -1;
 		group = NULL;
 	}
 
-	if (!group &&
-	    (!strcmp(raw, "Whitespace") || !strcmp(raw, "Join") ||
-	     !strcmp(raw, "Prefix") || !strcmp(raw, "Suffix") ||
-		 !strcmp(raw, "Default"))) {
-		syslog(LOG_ERR, "expected  ModifierGroup declaration on line %d", lineno);
+	if (!group && (!strcmp(raw, "Whitespace") || !strcmp(raw, "Join") ||
+		       !strcmp(raw, "Prefix") || !strcmp(raw, "Suffix") ||
+		       !strcmp(raw, "Default"))) {
+		syslog(LOG_ERR,
+		       "expected  ModifierGroup declaration on line %d",
+		       lineno);
 		return -1;
 	}
 
@@ -806,11 +849,11 @@ process_trans(char *buffer) {
 		unsigned int n;
 		glob_t g;
 		g.gl_offs = 0;
-		if (glob(tok, GLOB_ERR, NULL, &g) < 0) {
+		if (glob(tok, GLOB_ERR, NULL, &g) != 0) {
 			globfree(&g);
 			return -1;
 		}
-		for (n=0; n < g.gl_pathc; n++) {
+		for (n = 0; n < g.gl_pathc; n++) {
 			if (read_translations(g.gl_pathv[n]) < 0) {
 				globfree(&g);
 				return -1;
@@ -820,21 +863,21 @@ process_trans(char *buffer) {
 	} else if (!strcmp(raw, "Base")) {
 		base_classification = 1;
 	} else if (!strcmp(raw, "ModifierGroup")) {
-		group = create_group(&domain->groups, tok);
+		group = create_group(&parser_domain->groups, tok);
 		if (!group)
 			return -1;
 		base_classification = 0;
 	} else if (!strcmp(raw, "Whitespace")) {
-		if (update (&group->whitespace, tok) < 0)
+		if (update(&group->whitespace, tok) < 0)
 			return -1;
 	} else if (!strcmp(raw, "Join")) {
-		if (update (&group->join, tok) < 0)
+		if (update(&group->join, tok) < 0)
 			return -1;
 	} else if (!strcmp(raw, "Prefix")) {
-		if (append (&group->prefixes, tok) < 0)
+		if (append(&group->prefixes, tok) < 0)
 			return -1;
 	} else if (!strcmp(raw, "Suffix")) {
-		if (append (&group->suffixes, tok) < 0)
+		if (append(&group->suffixes, tok) < 0)
 			return -1;
 	} else if (!strcmp(raw, "Default")) {
 		ebitmap_t empty;
@@ -845,37 +888,56 @@ process_trans(char *buffer) {
 		}
 	} else if (group) {
 		if (add_word(group, raw, tok) < 0) {
-			syslog(LOG_ERR, "unable to add base_classification on line %d", lineno);
+			syslog(LOG_ERR,
+			       "unable to add base_classification on line %d",
+			       lineno);
 			return -1;
 		}
 	} else {
 		if (base_classification) {
-			if (add_base_classification(domain, raw, tok) < 0) {
-				syslog(LOG_ERR, "unable to add base_classification on line %d", lineno);
+			if (add_base_classification(parser_domain, raw, tok) <
+			    0) {
+				syslog(LOG_ERR,
+				       "unable to add base_classification on line %d",
+				       lineno);
 				return -1;
 			}
 		}
-		if (add_cache(domain, raw, tok) < 0)
+		if (add_cache(parser_domain, raw, tok) < 0)
 			return -1;
 	}
 	return 0;
 }
 
-int
-read_translations(const char *filename) {
+int read_translations(const char *filename)
+{
+	static unsigned int depth;
 	size_t size = 0;
 	char *buffer = NULL;
 	int rval = 0;
 
-	FILE *cfg = fopen(filename,"r");
-	if (!cfg) {
+	if (depth >= 32) {
+		syslog(LOG_ERR, "%s: Include nesting too deep", filename);
+		return -1;
+	}
+
+	int fd = selinux_policy_open(filename, O_RDONLY);
+	if (fd < 0) {
 		syslog(LOG_ERR, "%s file open failed", filename);
 		return -1;
 	}
 
+	FILE *cfg = fdopen(fd, "r");
+	if (!cfg) {
+		syslog(LOG_ERR, "%s file open failed", filename);
+		close(fd);
+		return -1;
+	}
+
+	depth++;
 	__fsetlocking(cfg, FSETLOCKING_BYCALLER);
 	while (getline(&buffer, &size, cfg) > 0) {
-		if( process_trans(buffer) < 0 ) {
+		if (process_trans(buffer) < 0) {
 			syslog(LOG_ERR, "%s file read failed", filename);
 			rval = -1;
 			break;
@@ -883,48 +945,56 @@ read_translations(const char *filename) {
 	}
 	free(buffer);
 	fclose(cfg);
+	depth--;
 	return rval;
 }
 
-int
-init_translations(void) {
+int init_translations(void)
+{
 	if (is_selinux_mls_enabled() <= 0)
 		return -1;
 
-	return(read_translations(selinux_translations_path()));
+	return (read_translations(selinux_translations_path()));
 }
 
-static char *
-extract_range(const char *incon) {
+static char *extract_range(const char *incon)
+{
 	context_t con = context_new(incon);
 	if (!con) {
-		syslog(LOG_ERR, "extract_range context_new(%s) failed: %s", incon, strerror(errno));
+		syslog(LOG_ERR, "extract_range context_new(%s) failed: %s",
+		       incon, strerror(errno));
 		return NULL;
 	}
 
 	const char *range = context_range_get(con);
 	if (!range) {
-		syslog(LOG_ERR, "extract_range: context_range_get(%s) failed: %m", incon);
+		syslog(LOG_ERR,
+		       "extract_range: context_range_get(%s) failed: %m",
+		       incon);
 		context_free(con);
 		return NULL;
 	}
 	char *r = strdup(range);
 	if (!r) {
-		log_error("extract_range: allocation error %s", strerror(errno));
+		log_error("extract_range: allocation error %s",
+			  strerror(errno));
 		return NULL;
 	}
 	context_free(con);
 	return r;
 }
 
-static char *
-new_context_str(const char *incon, const char *range) {
+static char *new_context_str(const char *incon, const char *range)
+{
 	char *rcon = NULL;
 	context_t con = context_new(incon);
 	if (!con) {
 		goto exit;
 	}
-	context_range_set(con, range);
+	if (context_range_set(con, range) < 0) {
+		context_free(con);
+		goto exit;
+	}
 	rcon = context_to_str(con);
 	context_free(con);
 	if (!rcon) {
@@ -938,163 +1008,269 @@ exit:
 	return NULL;
 }
 
-static char *
-find_in_hashtable(const char *range, domain_t *domain, context_map_node_t **table) {
+static char *find_in_hashtable(const char *range, domain_t *domain,
+			       context_map_node_t **table)
+{
 	char *trans = NULL;
 	context_map_t *map = find_in_table(table, range);
 	if (map) {
-		trans = strdup((table == domain->raw_to_trans) ? map->trans: map->raw);
+		trans = strdup((table == domain->raw_to_trans) ? map->trans :
+								 map->raw);
 		if (!trans) {
-			log_error("find_in_hashtable: allocation error %s", strerror(errno));
+			log_error("find_in_hashtable: allocation error %s",
+				  strerror(errno));
 			return NULL;
 		}
-		log_debug(" found %s in hashtable returning %s\n", range, trans);
+		log_debug(" found %s in hashtable returning %s\n", range,
+			  trans);
 	}
 	return trans;
 }
 
 #define spaceship_cmp(a, b) (((a) > (b)) - ((a) < (b)))
 
-static int
-string_size(const void *p1, const void *p2) {
+static int string_size(const void *p1, const void *p2)
+{
 	size_t len1 = strlen(*(const char *const *)p2);
 	size_t len2 = strlen(*(const char *const *)p1);
 	return spaceship_cmp(len1, len2);
 }
 
-static int
-word_size(const void *p1, const void *p2) {
+static int word_size(const void *p1, const void *p2)
+{
 	word_t *w1 = *(word_t **)p1;
 	word_t *w2 = *(word_t **)p2;
-	int w1_len=strlen(w1->text);
-	int w2_len=strlen(w2->text);
+	int w1_len = strlen(w1->text);
+	int w2_len = strlen(w2->text);
 	if (w1_len == w2_len)
 		return strcmp(w1->text, w2->text);
 	return spaceship_cmp(w2_len, w1_len);
 }
 
-static void
-build_regexp(pcre2_code **r, char *buffer) {
+static int buf_append(char **buf, size_t *cap, size_t *len, const char *s)
+{
+	size_t slen = strlen(s);
+
+	if (slen >= SIZE_MAX - 1 - *len) {
+		log_error("buf_append: length overflow (%zu + %zu)", *len,
+			  slen);
+		return -1;
+	}
+
+	size_t need = *len + slen + 1;
+	if (need > *cap) {
+		size_t ncap = *cap ? *cap : 128;
+		while (ncap < need) {
+			if (ncap > SIZE_MAX / 2) {
+				ncap = need;
+				break;
+			}
+			ncap *= 2;
+		}
+		char *n = realloc(*buf, ncap);
+		if (!n) {
+			log_error("buf_append: allocation error %s",
+				  strerror(errno));
+			return -1;
+		}
+		*buf = n;
+		*cap = ncap;
+	}
+	memcpy(*buf + *len, s, slen + 1);
+	*len += slen;
+	return 0;
+}
+
+/*
+ * Append s with PCRE metacharacters backslash-escaped so it matches
+ * literally.  Used for config-supplied label/word/affix/whitespace
+ * text spliced into the alternation patterns in build_regexps().
+ * Works both inside and outside a character class.
+ */
+static int buf_append_literal(char **buf, size_t *cap, size_t *len,
+			      const char *s)
+{
+	char esc[3] = { '\\', 0, 0 };
+	char lit[2] = { 0, 0 };
+
+	for (; *s; s++) {
+		if (strchr("\\^$.|?*+()[]{}-", *s)) {
+			esc[1] = *s;
+			if (buf_append(buf, cap, len, esc))
+				return -1;
+		} else {
+			lit[0] = *s;
+			if (buf_append(buf, cap, len, lit))
+				return -1;
+		}
+	}
+	return 0;
+}
+
+static void build_regexp(pcre2_code **r, char *buffer)
+{
 	int error;
 	PCRE2_SIZE error_offset;
 	if (*r)
 		pcre2_code_free(*r);
-	*r = pcre2_compile((PCRE2_SPTR8) buffer, PCRE2_ZERO_TERMINATED, PCRE2_CASELESS, &error, &error_offset, NULL);
+	*r = pcre2_compile((PCRE2_SPTR8)buffer, PCRE2_ZERO_TERMINATED,
+			   PCRE2_CASELESS, &error, &error_offset, NULL);
 	if (!*r) {
 		PCRE2_UCHAR errbuf[256];
 		pcre2_get_error_message(error, errbuf, sizeof(errbuf));
-		log_error("pcre compilation of '%s' failed at offset %zu: %s\n", buffer, error_offset, errbuf);
+		log_error("pcre compilation of '%s' failed at offset %zu: %s\n",
+			  buffer, error_offset, errbuf);
 	}
-	buffer[0] = '\0';
 }
 
-static int
-build_regexps(domain_t *domain) {
-	char buffer[1024 * 128];
-	buffer[0] = '\0';
+static int build_regexps(domain_t *domain)
+{
+	char *buffer = NULL;
+	char **sortable = NULL;
+	size_t cap = 0, len = 0;
 	base_classification_t *bc;
 	word_group_t *g;
 	affix_t *a;
 	word_t *w;
 	size_t n_el, i;
 
+#define APPEND(s)                                         \
+	do {                                              \
+		if (buf_append(&buffer, &cap, &len, (s))) \
+			goto err;                         \
+	} while (0)
+#define APPEND_LIT(s)                                             \
+	do {                                                      \
+		if (buf_append_literal(&buffer, &cap, &len, (s))) \
+			goto err;                                 \
+	} while (0)
+#define RESET()                           \
+	do {                              \
+		len = 0;                  \
+		if (buffer)               \
+			buffer[0] = '\0'; \
+	} while (0)
+
+	/* initialize buffer and cap to non-NULL/0 values */
+	APPEND("");
+
 	for (n_el = 0, bc = domain->base_classifications; bc; bc = bc->next) {
 		n_el++;
 	}
 
-	char **sortable = calloc(n_el, sizeof(char *));
+	sortable = calloc(n_el, sizeof(char *));
 	if (!sortable) {
 		log_error("allocation error %s", strerror(errno));
-		return -1;
+		goto err;
 	}
 
-	for (i=0, bc = domain->base_classifications; bc; bc = bc->next) {
+	for (i = 0, bc = domain->base_classifications; bc; bc = bc->next) {
 		sortable[i++] = bc->trans;
 	}
 
 	qsort(sortable, n_el, sizeof(char *), string_size);
 
 	for (i = 0; i < n_el; i++) {
-		strcat(buffer, sortable[i]);
-		if (i < n_el) strcat(buffer,"|");
+		APPEND_LIT(sortable[i]);
+		if (i != (n_el - 1))
+			APPEND("|");
 	}
 
 	free(sortable);
+	sortable = NULL;
 
 	log_debug(">>> %s classification regexp=%s\n", domain->name, buffer);
 	build_regexp(&domain->base_classification_regexp, buffer);
+	RESET();
 
 	for (g = domain->groups; g; g = g->next) {
 		if (g->prefixes) {
-			strcat(buffer,"(?:");
+			APPEND("(?:");
 			for (a = g->prefixes; a; a = a->next) {
-				strcat(buffer, a->text);
-				if (a->next) strcat(buffer,"|");
+				APPEND_LIT(a->text);
+				if (a->next)
+					APPEND("|");
 			}
-			strcat(buffer,")");
-			strcat(buffer,"[ 	]+");
-			log_debug(">>> %s %s prefix regexp=%s\n", domain->name, g->name, buffer);
+			APPEND(")");
+			APPEND("[ 	]+");
+			log_debug(">>> %s %s prefix regexp=%s\n", domain->name,
+				  g->name, buffer);
 			build_regexp(&g->prefix_regexp, buffer);
+			RESET();
 		}
 
 		if (g->prefixes)
-			strcat(buffer, "^");
-		strcat(buffer, "(?:");
+			APPEND("^");
+		APPEND("(?:");
 
-		g->sword_len=0;
+		g->sword_len = 0;
 		for (w = g->words; w; w = w->next)
 			g->sword_len++;
 
 		g->sword = calloc(g->sword_len, sizeof(word_t *));
 		if (!g->sword) {
 			log_error("allocation error %s", strerror(errno));
-			return -1;
+			goto err;
 		}
 
-		i=0;
+		i = 0;
 		for (w = g->words; w; w = w->next)
-			g->sword[i++]=w;
+			g->sword[i++] = w;
 
 		qsort(g->sword, g->sword_len, sizeof(word_t *), word_size);
 
-		for (i=0; i < g->sword_len; i++) {
-			if (i) strcat(buffer,"|");
-			strcat(buffer,"\\b");
-			strcat(buffer, g->sword[i]->text);
-			strcat(buffer,"\\b");
+		for (i = 0; i < g->sword_len; i++) {
+			if (i)
+				APPEND("|");
+			APPEND("\\b");
+			APPEND_LIT(g->sword[i]->text);
+			APPEND("\\b");
 		}
 
 		if (g->whitespace) {
-			strcat(buffer,"|[");
-			strcat(buffer, g->whitespace);
-			strcat(buffer, "]+");
+			APPEND("|[");
+			APPEND_LIT(g->whitespace);
+			APPEND("]+");
 		}
 
-		strcat(buffer, ")+");
+		APPEND(")+");
 		if (g->suffixes)
-			strcat(buffer, "$");
+			APPEND("$");
 
-		log_debug(">>> %s %s modifier regexp=%s\n", domain->name, g->name, buffer);
+		log_debug(">>> %s %s modifier regexp=%s\n", domain->name,
+			  g->name, buffer);
 		build_regexp(&g->word_regexp, buffer);
+		RESET();
+
 		if (g->suffixes) {
-			strcat(buffer,"[ 	]+");
-			strcat(buffer,"(?:");
+			APPEND("[ 	]+");
+			APPEND("(?:");
 			for (a = g->suffixes; a; a = a->next) {
-				strcat(buffer, a->text);
-				if (a->next) strcat(buffer,"|");
+				APPEND_LIT(a->text);
+				if (a->next)
+					APPEND("|");
 			}
-			strcat(buffer,")");
-			log_debug(">>> %s %s suffix regexp=%s\n", domain->name, g->name, buffer);
+			APPEND(")");
+			log_debug(">>> %s %s suffix regexp=%s\n", domain->name,
+				  g->name, buffer);
 			build_regexp(&g->suffix_regexp, buffer);
+			RESET();
 		}
 	}
 
+	free(buffer);
 	return 0;
+err:
+	free(sortable);
+	free(buffer);
+	return -1;
+#undef APPEND
+#undef APPEND_LIT
+#undef RESET
 }
 
-static char *
-compute_raw_from_trans(const char *level, domain_t *domain) {
-
+static char *compute_raw_from_trans(const char *level, domain_t *domain)
+{
 #ifdef DEBUG
 	struct timeval startTime;
 	gettimeofday(&startTime, 0);
@@ -1116,7 +1292,8 @@ compute_raw_from_trans(const char *level, domain_t *domain) {
 
 	work = strdup(level);
 	if (!work) {
-		log_error("compute_raw_from_trans: allocation error %s", strerror(errno));
+		log_error("compute_raw_from_trans: allocation error %s",
+			  strerror(errno));
 		goto err;
 	}
 	work_len = strlen(work);
@@ -1127,27 +1304,34 @@ compute_raw_from_trans(const char *level, domain_t *domain) {
 	if (!domain->base_classification_regexp)
 		goto err;
 	log_debug(" compute_raw_from_trans work = %s\n", work);
-	match_data = pcre2_match_data_create_from_pattern(domain->base_classification_regexp, NULL);
+	match_data = pcre2_match_data_create_from_pattern(
+		domain->base_classification_regexp, NULL);
 	if (!match_data) {
 		log_error("allocation error %s", strerror(errno));
 		goto err;
 	}
-	rc = pcre2_match(domain->base_classification_regexp, (PCRE2_SPTR8)work, work_len, 0, PCRE2_ANCHORED, match_data, NULL);
+	rc = pcre2_match(domain->base_classification_regexp, (PCRE2_SPTR8)work,
+			 work_len, 0, PCRE2_ANCHORED, match_data, NULL);
 	if (rc > 0) {
-		const PCRE2_SIZE *ovector = pcre2_get_ovector_pointer(match_data);
+		const PCRE2_SIZE *ovector =
+			pcre2_get_ovector_pointer(match_data);
 		match = strndup(work + ovector[0], ovector[1] - ovector[0]);
 		if (!match) {
 			log_error("allocation error %s", strerror(errno));
 			goto err;
 		}
-		log_debug(" compute_raw_from_trans match = %s len = %zu\n", match, strlen(match));
+		log_debug(" compute_raw_from_trans match = %s len = %zu\n",
+			  match, strlen(match));
 		base_classification_t *bc;
 		for (bc = domain->base_classifications; bc; bc = bc->next) {
-			if (!strcmp(bc->trans, match)) {
-				log_debug(" compute_raw_from_trans base classification %s matched %s\n", level, bc->trans);
+			if (!strcasecmp(bc->trans, match)) {
+				log_debug(
+					" compute_raw_from_trans base classification %s matched %s\n",
+					level, bc->trans);
 				mraw = malloc(sizeof(mls_level_t));
 				if (!mraw) {
-					log_error("allocation error %s", strerror(errno));
+					log_error("allocation error %s",
+						  strerror(errno));
 					goto err;
 				}
 				if (mls_level_cpy(mraw, bc->level) < 0)
@@ -1157,7 +1341,7 @@ compute_raw_from_trans(const char *level, domain_t *domain) {
 		}
 
 		memset(work + ovector[0], '#', ovector[1] - ovector[0]);
-		char *p=work + ovector[0] + ovector[1];
+		char *p = work + ovector[1];
 		while (*p && (strchr(" 	", *p) != NULL))
 			*p++ = '#';
 
@@ -1166,10 +1350,14 @@ compute_raw_from_trans(const char *level, domain_t *domain) {
 	} else {
 		switch (rc) {
 		case PCRE2_ERROR_NOMATCH:
-			log_debug(" compute_raw_from_trans no base classification matched %s\n", level);
+			log_debug(
+				" compute_raw_from_trans no base classification matched %s\n",
+				level);
 			break;
 		default:
-			log_error("compute_raw_from_trans: base matching error for input '%s': %d\n", level, rc);
+			log_error(
+				"compute_raw_from_trans: base matching error for input '%s': %d\n",
+				level, rc);
 			break;
 		}
 	}
@@ -1183,122 +1371,209 @@ compute_raw_from_trans(const char *level, domain_t *domain) {
 
 	int complete = 0;
 	int change = 1;
-	while(change && !complete) {
+	while (change && !complete) {
 		change = 0;
-		for (g = domain->groups; g && !change && !complete; g = g->next) {
+		for (g = domain->groups; g && !change && !complete;
+		     g = g->next) {
 			int prefix = 0, suffix = 0;
 			PCRE2_SIZE prefix_offset = 0, prefix_len = 0;
 			PCRE2_SIZE suffix_offset = 0, suffix_len = 0;
 			if (g->prefix_regexp) {
-				match_data = pcre2_match_data_create_from_pattern(g->prefix_regexp, NULL);
+				match_data =
+					pcre2_match_data_create_from_pattern(
+						g->prefix_regexp, NULL);
 				if (!match_data) {
-					log_error("allocation error %s", strerror(errno));
+					log_error("allocation error %s",
+						  strerror(errno));
 					goto err;
 				}
-				rc = pcre2_match(g->prefix_regexp, (PCRE2_SPTR8)work, work_len, 0, 0, match_data, NULL);
+				rc = pcre2_match(g->prefix_regexp,
+						 (PCRE2_SPTR8)work, work_len, 0,
+						 0, match_data, NULL);
 				if (rc > 0) {
-					const PCRE2_SIZE *ovector = pcre2_get_ovector_pointer(match_data);
+					const PCRE2_SIZE *ovector =
+						pcre2_get_ovector_pointer(
+							match_data);
 					prefix = 1;
 					prefix_offset = ovector[0];
 					prefix_len = ovector[1] - ovector[0];
 				} else if (rc != PCRE2_ERROR_NOMATCH) {
-					log_error("compute_raw_from_trans: prefix matching error for input '%s': %d\n", level, rc);
+					log_error(
+						"compute_raw_from_trans: prefix matching error for input '%s': %d\n",
+						level, rc);
 				}
 				pcre2_match_data_free(match_data);
 				match_data = NULL;
 			}
 			if (g->suffix_regexp) {
-				match_data = pcre2_match_data_create_from_pattern(g->suffix_regexp, NULL);
+				match_data =
+					pcre2_match_data_create_from_pattern(
+						g->suffix_regexp, NULL);
 				if (!match_data) {
-					log_error("allocation error %s", strerror(errno));
+					log_error("allocation error %s",
+						  strerror(errno));
 					goto err;
 				}
-				rc = pcre2_match(g->suffix_regexp, (PCRE2_SPTR8)work, work_len, 0, 0, match_data, NULL);
+				rc = pcre2_match(g->suffix_regexp,
+						 (PCRE2_SPTR8)work, work_len, 0,
+						 0, match_data, NULL);
 				if (rc > 0) {
-					const PCRE2_SIZE *ovector = pcre2_get_ovector_pointer(match_data);
+					const PCRE2_SIZE *ovector =
+						pcre2_get_ovector_pointer(
+							match_data);
 					suffix = 1;
 					suffix_offset = ovector[0];
 					suffix_len = ovector[1] - ovector[0];
 				} else if (rc != PCRE2_ERROR_NOMATCH) {
-					log_error("compute_raw_from_trans: suffix matching error for input '%s': %d\n", level, rc);
+					log_error(
+						"compute_raw_from_trans: suffix matching error for input '%s': %d\n",
+						level, rc);
 				}
 				pcre2_match_data_free(match_data);
 				match_data = NULL;
 			}
 
-/* anchors prefix ^, suffix $ */
+			/* anchors prefix ^, suffix $ */
 			if (((!g->prefixes && !g->suffixes) ||
 			     (g->prefixes && prefix) ||
 			     (g->suffixes && suffix)) &&
-			     g->word_regexp) {
-				char *s = work + prefix_offset + prefix_len;
-				PCRE2_SIZE len = (suffix_len ? suffix_offset : work_len) - prefix_len - prefix_offset;
-				match_data = pcre2_match_data_create_from_pattern(g->word_regexp, NULL);
+			    g->word_regexp) {
+				PCRE2_SIZE start = prefix_offset + prefix_len;
+				PCRE2_SIZE end =
+					(suffix_len ? suffix_offset : work_len);
+				if (end < start)
+					goto no_word_match;
+				char *s = work + start;
+				PCRE2_SIZE len = end - start;
+				match_data =
+					pcre2_match_data_create_from_pattern(
+						g->word_regexp, NULL);
 				if (!match_data) {
-					log_error("allocation error %s", strerror(errno));
+					log_error("allocation error %s",
+						  strerror(errno));
 					goto err;
 				}
-				rc = pcre2_match(g->word_regexp, (PCRE2_SPTR8)s, len, 0, 0, match_data, NULL);
+				rc = pcre2_match(g->word_regexp, (PCRE2_SPTR8)s,
+						 len, 0, 0, match_data, NULL);
 				if (rc > 0) {
-					const PCRE2_SIZE *ovector = pcre2_get_ovector_pointer(match_data);
-					match = strndup(s + ovector[0], ovector[1] - ovector[0]);
+					const PCRE2_SIZE *ovector =
+						pcre2_get_ovector_pointer(
+							match_data);
+					match = strndup(s + ovector[0],
+							ovector[1] -
+								ovector[0]);
 					if (!match) {
-						log_error("allocation error %s", strerror(errno));
+						log_error("allocation error %s",
+							  strerror(errno));
 						goto err;
 					}
 					trim(match, g->whitespace);
 					if (*match) {
-						char *p = triml(match, g->whitespace);
+						char *p = triml(match,
+								g->whitespace);
 						while (p && *p) {
 							int plen = strlen(p);
 							unsigned int i;
-							for (i = 0; i < g->sword_len; i++) {
-								word_t *w = g->sword[i];
-								int wlen = strlen(w->text);
-								if (plen >= wlen && !strncmp(w->text, p, strlen(w->text))){
-									if (ebitmap_andnot(&set, &w->cat, &g->def, maxbit) < 0) goto err;
+							for (i = 0;
+							     i < g->sword_len;
+							     i++) {
+								word_t *w =
+									g->sword[i];
+								int wlen = strlen(
+									w->text);
+								if (plen >= wlen &&
+								    !strncasecmp(
+									    w->text,
+									    p,
+									    strlen(w->text))) {
+									if (ebitmap_andnot(
+										    &set,
+										    &w->cat,
+										    &g->def,
+										    maxbit) <
+									    0)
+										goto err;
 
-									if (ebitmap_xor(&tmp, &w->cat, &g->def) < 0) goto err;
-									if (ebitmap_and(&clear, &tmp, &g->def) < 0) goto err;
-									if (ebitmap_union(&mraw->cat, &set) < 0) goto err;
+									if (ebitmap_xor(
+										    &tmp,
+										    &w->cat,
+										    &g->def) <
+									    0)
+										goto err;
+									if (ebitmap_and(
+										    &clear,
+										    &tmp,
+										    &g->def) <
+									    0)
+										goto err;
+									if (ebitmap_union(
+										    &mraw->cat,
+										    &set) <
+									    0)
+										goto err;
 
-									ebitmap_destroy(&tmp);
-									if (ebitmap_cpy(&tmp, &mraw->cat) < 0) goto err;
-									ebitmap_destroy(&mraw->cat);
-									if (ebitmap_andnot(&mraw->cat, &tmp, &clear, maxbit) < 0) goto err;
+									ebitmap_destroy(
+										&tmp);
+									if (ebitmap_cpy(
+										    &tmp,
+										    &mraw->cat) <
+									    0)
+										goto err;
+									ebitmap_destroy(
+										&mraw->cat);
+									if (ebitmap_andnot(
+										    &mraw->cat,
+										    &tmp,
+										    &clear,
+										    maxbit) <
+									    0)
+										goto err;
 
-									ebitmap_destroy(&tmp);
-									ebitmap_destroy(&set);
-									ebitmap_destroy(&clear);
-									p += strlen(w->text);
+									ebitmap_destroy(
+										&tmp);
+									ebitmap_destroy(
+										&set);
+									ebitmap_destroy(
+										&clear);
+									p += strlen(
+										w->text);
 									change++;
 									break;
 								}
 							}
 							if (i == g->sword_len) {
-								syslog(LOG_ERR, "conversion error");
+								syslog(LOG_ERR,
+								       "conversion error");
 								break;
 							}
-							p = triml(p, g->whitespace);
+							p = triml(
+								p,
+								g->whitespace);
 						}
-						memset(work + prefix_offset, '#', prefix_len);
-						memset(work + suffix_offset, '#', suffix_len);
-						memset(s + ovector[0], '#', ovector[1] - ovector[0]);
+						memset(work + prefix_offset,
+						       '#', prefix_len);
+						memset(work + suffix_offset,
+						       '#', suffix_len);
+						memset(s + ovector[0], '#',
+						       ovector[1] - ovector[0]);
 					}
 					free(match);
 					match = NULL;
 				} else if (rc != PCRE2_ERROR_NOMATCH) {
-					log_error("compute_raw_from_trans: word matching error for input '%s' for substring '%s': %d\n", level, s, rc);
+					log_error(
+						"compute_raw_from_trans: word matching error for input '%s' for substring '%s': %d\n",
+						level, s, rc);
 				}
 				pcre2_match_data_free(match_data);
 				match_data = NULL;
 			}
-/* YYY */
-			complete=1;
+no_word_match:
+			/* YYY */
+			complete = 1;
 			char *p = work;
-			while(*p) {
+			while (*p) {
 				if (isalnum(*p++)) {
-					complete=0;
+					complete = 0;
 					break;
 				}
 			}
@@ -1318,9 +1593,12 @@ compute_raw_from_trans(const char *level, domain_t *domain) {
 	gettimeofday(&stopTime, 0);
 	long int ms;
 	if (startTime.tv_usec > stopTime.tv_usec)
-		ms = (stopTime.tv_sec - startTime.tv_sec - 1) * 1000 + (stopTime.tv_usec/1000 + 1000 - startTime.tv_usec/1000);
+		ms = (stopTime.tv_sec - startTime.tv_sec - 1) * 1000 +
+		     (stopTime.tv_usec / 1000 + 1000 -
+		      startTime.tv_usec / 1000);
 	else
-		ms = (stopTime.tv_sec - startTime.tv_sec    ) * 1000 + (stopTime.tv_usec/1000        - startTime.tv_usec/1000);
+		ms = (stopTime.tv_sec - startTime.tv_sec) * 1000 +
+		     (stopTime.tv_usec / 1000 - startTime.tv_usec / 1000);
 	log_debug(" compute_raw_from_trans in %ld ms'\n", ms);
 #endif
 
@@ -1338,9 +1616,8 @@ err:
 	return NULL;
 }
 
-static char *
-compute_trans_from_raw(const char *level, domain_t *domain) {
-
+static char *compute_trans_from_raw(const char *level, domain_t *domain)
+{
 #ifdef DEBUG
 	struct timeval startTime;
 	gettimeofday(&startTime, 0);
@@ -1349,8 +1626,11 @@ compute_trans_from_raw(const char *level, domain_t *domain) {
 	word_group_t *g;
 	mls_level_t *l = NULL;
 	char *rval = NULL;
+	char *obuf = NULL;
+	size_t ocap = 0, olen = 0;
 	word_group_t *groups = NULL;
-	ebitmap_t bit_diff, temp, handled, nothandled, unhandled, orig_unhandled;
+	ebitmap_t bit_diff, temp, handled, nothandled, unhandled,
+		orig_unhandled;
 
 	ebitmap_init(&bit_diff);
 	ebitmap_init(&temp);
@@ -1361,13 +1641,13 @@ compute_trans_from_raw(const char *level, domain_t *domain) {
 
 	if (!level)
 		goto err;
-	
-	l = parse_raw(level);
+
+	l = parse_raw(level, false);
 	if (!l)
 		goto err;
 	log_debug(" compute_trans_from_raw raw = %s\n", level);
 
-/* YYY */
+	/* YYY */
 	/* check constraints */
 	if (violates_constraints(l)) {
 		syslog(LOG_ERR, "%s violates constraints", level);
@@ -1381,13 +1661,13 @@ compute_trans_from_raw(const char *level, domain_t *domain) {
 	for (bc = domain->base_classifications; bc && !done; bc = bc->next) {
 		if (l->sens == bc->level->sens) {
 			/* skip if alias of last bc */
-			if (last &&
-			    last->level->sens == bc->level->sens &&
-			    ebitmap_cmp(&last->level->cat, &bc->level->cat) == 0)
+			if (last && last->level->sens == bc->level->sens &&
+			    ebitmap_cmp(&last->level->cat, &bc->level->cat))
 				continue;
 
 			/* compute bits not consumed by base classification */
-			if (ebitmap_xor(&unhandled, &l->cat, &bc->level->cat) < 0)
+			if (ebitmap_xor(&unhandled, &l->cat, &bc->level->cat) <
+			    0)
 				goto err;
 			if (ebitmap_cpy(&orig_unhandled, &unhandled) < 0)
 				goto err;
@@ -1399,53 +1679,79 @@ compute_trans_from_raw(const char *level, domain_t *domain) {
 					if (!strcmp(g->name, (*t)->name))
 						break;
 
-				if (! *t) {
-					word_group_t *wg = create_group(&groups, g->name);
+				if (!*t) {
+					word_group_t *wg =
+						create_group(&groups, g->name);
+					if (!wg)
+						goto err;
 					if (g->prefixes)
-						if (append(&wg->prefixes, g->prefixes->text) < 0)
+						if (append(&wg->prefixes,
+							   g->prefixes->text) <
+						    0)
 							goto err;
 					if (g->suffixes)
-						if (append(&wg->suffixes, g->suffixes->text) < 0)
+						if (append(&wg->suffixes,
+							   g->suffixes->text) <
+						    0)
 							goto err;
 					if (g->join)
-						if (update(&wg->join, g->join) < 0)
+						if (update(&wg->join, g->join) <
+						    0)
 							goto err;
 				}
 			}
 
-			int loops, hamming, change=1;
-			for (loops = 50; ebitmap_cardinality(&unhandled) && loops > 0 && change; loops--) {
+			int loops, hamming, change = 1;
+			for (loops = 50; ebitmap_cardinality(&unhandled) &&
+					 loops > 0 && change;
+			     loops--) {
 				change = 0;
 				hamming = 10000;
-				if (ebitmap_xor(&handled, &unhandled, &orig_unhandled) < 0)
+				if (ebitmap_xor(&handled, &unhandled,
+						&orig_unhandled) < 0)
 					goto err;
-				if (ebitmap_not(&nothandled, &handled, maxbit) < 0)
+				if (ebitmap_not(&nothandled, &handled, maxbit) <
+				    0)
 					goto err;
 				word_group_t *currentGroup = NULL;
 				word_t *currentWord = NULL;
-				for (g = domain->groups; g && hamming; g = g->next) {
+				for (g = domain->groups; g && hamming;
+				     g = g->next) {
 					word_t *w;
-					for (w = g->words; w && hamming; w = w->next) {
-						int cardinality = ebitmap_cardinality(&w->normal);
+					for (w = g->words; w && hamming;
+					     w = w->next) {
+						int cardinality =
+							ebitmap_cardinality(
+								&w->normal);
 						/* If the word is all inverse bits and the level does not have inverse bits - skip */
 						if (cardinality && !doInverse) {
 							continue;
 						}
 
 						/* if only unhandled bits are different */
-						if (ebitmap_or(&temp, &w->normal, &w->inverse) < 0)
+						if (ebitmap_or(&temp,
+							       &w->normal,
+							       &w->inverse) < 0)
 							goto err;
-						if (ebitmap_and(&bit_diff, &temp, &nothandled) < 0)
+						if (ebitmap_and(
+							    &bit_diff, &temp,
+							    &nothandled) < 0)
 							goto err;
 						ebitmap_destroy(&temp);
-// xor bit_diff handled?
-						if (ebitmap_and(&temp, &bit_diff, &unhandled) < 0)
+						// xor bit_diff handled?
+						if (ebitmap_and(&temp,
+								&bit_diff,
+								&unhandled) < 0)
 							goto err;
-						if (ebitmap_cmp(&bit_diff, &temp)) {
-							int h = ebitmap_hamming_distance(&bit_diff, &unhandled);
+						if (ebitmap_cmp(&bit_diff,
+								&temp)) {
+							int h = ebitmap_hamming_distance(
+								&bit_diff,
+								&unhandled);
 							if (h < hamming) {
 								hamming = h;
-								currentGroup = g;
+								currentGroup =
+									g;
 								currentWord = w;
 							}
 						}
@@ -1457,13 +1763,17 @@ compute_trans_from_raw(const char *level, domain_t *domain) {
 				ebitmap_destroy(&nothandled);
 
 				if (currentWord) {
-					if (ebitmap_xor(&bit_diff, &currentWord->cat, &bc->level->cat) < 0)
+					if (ebitmap_xor(&bit_diff,
+							&currentWord->cat,
+							&bc->level->cat) < 0)
 						goto err;
 
 					if (ebitmap_cpy(&temp, &unhandled) < 0)
 						goto err;
 					ebitmap_destroy(&unhandled);
-					if (ebitmap_andnot(&unhandled, &temp, &bit_diff, maxbit) < 0)
+					if (ebitmap_andnot(&unhandled, &temp,
+							   &bit_diff,
+							   maxbit) < 0)
 						goto err;
 
 					ebitmap_destroy(&bit_diff);
@@ -1471,9 +1781,12 @@ compute_trans_from_raw(const char *level, domain_t *domain) {
 
 					word_group_t **t;
 					for (t = &groups; *t; t = &(*t)->next)
-						if (!strcmp(currentGroup->name, (*t)->name))
+						if (!strcmp(currentGroup->name,
+							    (*t)->name))
 							break;
-					create_word(&(*t)->words, currentWord->text);
+					if (!create_word(&(*t)->words,
+							 currentWord->text))
+						goto err;
 					change++;
 				}
 			}
@@ -1482,39 +1795,40 @@ compute_trans_from_raw(const char *level, domain_t *domain) {
 			ebitmap_destroy(&unhandled);
 			ebitmap_destroy(&orig_unhandled);
 			if (done) {
-				char buffer[9999];
-				buffer[0] = 0;
-				strcat(buffer, bc->trans);
-				strcat(buffer, " ");
-				for (g=groups; g; g = g->next) {
+#define OAPPEND(s)                                        \
+	do {                                              \
+		if (buf_append(&obuf, &ocap, &olen, (s))) \
+			goto err;                         \
+	} while (0)
+				OAPPEND(bc->trans);
+				OAPPEND(" ");
+				for (g = groups; g; g = g->next) {
 					if (g->words && g->prefixes) {
-						strcat(buffer, g->prefixes->text);
-						strcat(buffer, " ");
+						OAPPEND(g->prefixes->text);
+						OAPPEND(" ");
 					}
 					word_t *w;
-					for (w=g->words; w; w = w->next) {
-						strcat(buffer, w->text);
+					for (w = g->words; w; w = w->next) {
+						OAPPEND(w->text);
 						if (w->next)
-							strcat(buffer, g->join);
+							OAPPEND(g->join);
 					}
 					if (g->words && g->suffixes) {
-						strcat(buffer, " ");
-						strcat(buffer, g->suffixes->text);
+						OAPPEND(" ");
+						OAPPEND(g->suffixes->text);
 					}
 					word_group_t *n = g->next;
-					while(g->words && n) {
+					while (g->words && n) {
 						if (n->words) {
-							strcat(buffer, " ");
+							OAPPEND(" ");
 							break;
 						}
 						n = n->next;
 					}
 				}
-				rval = strdup(buffer);
-				if (!rval) {
-					log_error("compute_trans_from_raw: allocation error %s", strerror(errno));
-					goto err;
-				}
+				rval = obuf;
+				obuf = NULL;
+#undef OAPPEND
 			}
 			/* clean up */
 			while (groups)
@@ -1532,9 +1846,12 @@ compute_trans_from_raw(const char *level, domain_t *domain) {
 	gettimeofday(&stopTime, 0);
 	long int ms;
 	if (startTime.tv_usec > stopTime.tv_usec)
-		ms = (stopTime.tv_sec - startTime.tv_sec - 1) * 1000 + (stopTime.tv_usec/1000 + 1000 - startTime.tv_usec/1000);
+		ms = (stopTime.tv_sec - startTime.tv_sec - 1) * 1000 +
+		     (stopTime.tv_usec / 1000 + 1000 -
+		      startTime.tv_usec / 1000);
 	else
-		ms = (stopTime.tv_sec - startTime.tv_sec    ) * 1000 + (stopTime.tv_usec/1000        - startTime.tv_usec/1000);
+		ms = (stopTime.tv_sec - startTime.tv_sec) * 1000 +
+		     (stopTime.tv_usec / 1000 - startTime.tv_usec / 1000);
 
 	log_debug(" compute_trans_from_raw in %ld ms'\n", ms);
 #endif
@@ -1542,6 +1859,7 @@ compute_trans_from_raw(const char *level, domain_t *domain) {
 	return rval;
 
 err:
+	free(obuf);
 	while (groups)
 		destroy_group(&groups, groups);
 	mls_level_destroy(l);
@@ -1549,8 +1867,8 @@ err:
 	return NULL;
 }
 
-int
-trans_context(const char *incon, char **rcon) {
+int trans_context(const char *incon, char **rcon)
+{
 	char *trans = NULL;
 	*rcon = NULL;
 
@@ -1561,56 +1879,65 @@ trans_context(const char *incon, char **rcon) {
 
 	log_debug(" trans_context input = %s\n", incon);
 	char *range = extract_range(incon);
-	if (!range) return -1;
+	if (!range)
+		return -1;
 
 	domain_t *domain = domains;
-	for (;domain; domain = domain->next) {
+	for (; domain; domain = domain->next) {
 		trans = find_in_hashtable(range, domain, domain->raw_to_trans);
-		if (trans) break;
+		if (trans)
+			break;
 
 		/* try split and translate */
 		char *lrange = NULL, *urange = NULL;
 		char *ltrans = NULL, *utrans = NULL;
-		char *dashp = strchr(range,'-');
+		char *dashp = strchr(range, '-');
 		if (dashp) {
 			*dashp = 0;
 			lrange = range;
-			urange = dashp+1;
+			urange = dashp + 1;
 		} else {
 			trans = compute_trans_from_raw(range, domain);
-			if (trans)
+			if (trans) {
 				if (add_cache(domain, range, trans) < 0) {
 					free(trans);
 					free(range);
 					return -1;
 				}
+				break;
+			}
 		}
 
 		if (lrange && urange) {
-			ltrans = find_in_hashtable(lrange, domain, domain->raw_to_trans);
-			if (! ltrans) {
+			ltrans = find_in_hashtable(lrange, domain,
+						   domain->raw_to_trans);
+			if (!ltrans) {
 				ltrans = compute_trans_from_raw(lrange, domain);
 				if (ltrans) {
-					if (add_cache(domain, lrange, ltrans) < 0) {
+					if (add_cache(domain, lrange, ltrans) <
+					    0) {
 						free(ltrans);
 						free(range);
 						return -1;
 					}
 				} else {
 					ltrans = strdup(lrange);
-					if (! ltrans) {
-						log_error("strdup failed %s", strerror(errno));
+					if (!ltrans) {
+						log_error("strdup failed %s",
+							  strerror(errno));
 						free(range);
 						return -1;
 					}
 				}
 			}
 
-			utrans = find_in_hashtable(urange, domain, domain->raw_to_trans);
-			if (! utrans) {
+			utrans = find_in_hashtable(urange, domain,
+						   domain->raw_to_trans);
+			if (!utrans) {
 				utrans = compute_trans_from_raw(urange, domain);
 				if (utrans) {
-					if (add_cache(domain, urange, utrans) < 0) {
+					if (add_cache(domain, urange, utrans) <
+					    0) {
 						free(utrans);
 						free(ltrans);
 						free(range);
@@ -1618,8 +1945,9 @@ trans_context(const char *incon, char **rcon) {
 					}
 				} else {
 					utrans = strdup(urange);
-					if (! utrans) {
-						log_error("strdup failed %s", strerror(errno));
+					if (!utrans) {
+						log_error("strdup failed %s",
+							  strerror(errno));
 						free(ltrans);
 						free(range);
 						return -1;
@@ -1629,15 +1957,18 @@ trans_context(const char *incon, char **rcon) {
 
 			if (strcmp(ltrans, utrans) == 0) {
 				if (asprintf(&trans, "%s", ltrans) < 0) {
-					log_error("asprintf failed %s", strerror(errno));
+					log_error("asprintf failed %s",
+						  strerror(errno));
 					free(utrans);
 					free(ltrans);
 					free(range);
 					return -1;
 				}
 			} else {
-				if (asprintf(&trans, "%s-%s", ltrans, utrans) < 0) {
-					log_error("asprintf failed %s", strerror(errno));
+				if (asprintf(&trans, "%s-%s", ltrans, utrans) <
+				    0) {
+					log_error("asprintf failed %s",
+						  strerror(errno));
 					free(utrans);
 					free(ltrans);
 					free(range);
@@ -1670,17 +2001,21 @@ trans_context(const char *incon, char **rcon) {
 	gettimeofday(&stopTime, 0);
 	long int ms;
 	if (startTime.tv_usec > stopTime.tv_usec)
-		ms = (stopTime.tv_sec - startTime.tv_sec - 1) * 1000 + (stopTime.tv_usec/1000 + 1000 - startTime.tv_usec/1000);
+		ms = (stopTime.tv_sec - startTime.tv_sec - 1) * 1000 +
+		     (stopTime.tv_usec / 1000 + 1000 -
+		      startTime.tv_usec / 1000);
 	else
-		ms = (stopTime.tv_sec - startTime.tv_sec    ) * 1000 + (stopTime.tv_usec/1000        - startTime.tv_usec/1000);
+		ms = (stopTime.tv_sec - startTime.tv_sec) * 1000 +
+		     (stopTime.tv_usec / 1000 - startTime.tv_usec / 1000);
 
-	log_debug(" trans_context input='%s' output='%s in %ld ms'\n", incon, *rcon, ms);
+	log_debug(" trans_context input='%s' output='%s in %ld ms'\n", incon,
+		  *rcon, ms);
 #endif
 	return 0;
 }
 
-int
-untrans_context(const char *incon, char **rcon) {
+int untrans_context(const char *incon, char **rcon)
+{
 	char *raw = NULL;
 	*rcon = NULL;
 
@@ -1691,30 +2026,36 @@ untrans_context(const char *incon, char **rcon) {
 
 	log_debug(" untrans_context incon = %s\n", incon);
 	char *range = extract_range(incon);
-	if (!range) return -1;
+	if (!range)
+		return -1;
 	log_debug(" untrans_context range = %s\n", range);
 
 	domain_t *domain = domains;
-	for (;domain; domain = domain->next) {
+	for (; domain; domain = domain->next) {
 		raw = find_in_hashtable(range, domain, domain->trans_to_raw);
-		if (raw) break;
+		if (raw)
+			break;
 
 		/* try split and translate */
 		char *lrange = NULL, *urange = NULL;
 		char *lraw = NULL, *uraw = NULL;
-		char *dashp = strchr(range,'-');
+		char *dashp = strchr(range, '-');
 		if (dashp) {
 			*dashp = 0;
 			lrange = range;
-			urange = dashp+1;
+			urange = dashp + 1;
 		} else {
 			raw = compute_raw_from_trans(range, domain);
 			if (raw) {
-				char *canonical = find_in_hashtable(raw, domain, domain->raw_to_trans);
+				char *canonical = find_in_hashtable(
+					raw, domain, domain->raw_to_trans);
 				if (!canonical) {
-					canonical = compute_trans_from_raw(raw, domain);
-					if (canonical && strcmp(canonical, range))
-						if (add_cache(domain, raw, canonical) < 0) {
+					canonical = compute_trans_from_raw(
+						raw, domain);
+					if (canonical &&
+					    strcmp(canonical, range))
+						if (add_cache(domain, raw,
+							      canonical) < 0) {
 							free(canonical);
 							free(range);
 							free(raw);
@@ -1728,21 +2069,33 @@ untrans_context(const char *incon, char **rcon) {
 					free(raw);
 					return -1;
 				}
+				break;
 			} else {
-				log_debug("untrans_context unable to compute raw context %s\n", range);
+				log_debug(
+					"untrans_context unable to compute raw context %s\n",
+					range);
 			}
 		}
 
 		if (lrange && urange) {
-			lraw = find_in_hashtable(lrange, domain, domain->trans_to_raw);
-			if (! lraw) {
+			lraw = find_in_hashtable(lrange, domain,
+						 domain->trans_to_raw);
+			if (!lraw) {
 				lraw = compute_raw_from_trans(lrange, domain);
 				if (lraw) {
-					char *canonical = find_in_hashtable(lraw, domain, domain->raw_to_trans);
+					char *canonical = find_in_hashtable(
+						lraw, domain,
+						domain->raw_to_trans);
 					if (!canonical) {
-						canonical = compute_trans_from_raw(lraw, domain);
+						canonical =
+							compute_trans_from_raw(
+								lraw, domain);
 						if (canonical)
-							if (add_cache(domain, lraw, canonical) < 0) {
+							if (add_cache(
+								    domain,
+								    lraw,
+								    canonical) <
+							    0) {
 								free(canonical);
 								free(lraw);
 								free(range);
@@ -1751,30 +2104,41 @@ untrans_context(const char *incon, char **rcon) {
 					}
 					if (canonical)
 						free(canonical);
-					if (add_cache(domain, lraw, lrange) < 0) {
+					if (add_cache(domain, lraw, lrange) <
+					    0) {
 						free(lraw);
 						free(range);
 						return -1;
 					}
 				} else {
 					lraw = strdup(lrange);
-					if (! lraw) {
-						log_error("strdup failed %s", strerror(errno));
+					if (!lraw) {
+						log_error("strdup failed %s",
+							  strerror(errno));
 						free(range);
 						return -1;
 					}
 				}
 			}
 
-			uraw = find_in_hashtable(urange, domain, domain->trans_to_raw);
-			if (! uraw) {
+			uraw = find_in_hashtable(urange, domain,
+						 domain->trans_to_raw);
+			if (!uraw) {
 				uraw = compute_raw_from_trans(urange, domain);
 				if (uraw) {
-					char *canonical = find_in_hashtable(uraw, domain, domain->raw_to_trans);
+					char *canonical = find_in_hashtable(
+						uraw, domain,
+						domain->raw_to_trans);
 					if (!canonical) {
-						canonical = compute_trans_from_raw(uraw, domain);
+						canonical =
+							compute_trans_from_raw(
+								uraw, domain);
 						if (canonical)
-							if (add_cache(domain, uraw, canonical) < 0) {
+							if (add_cache(
+								    domain,
+								    uraw,
+								    canonical) <
+							    0) {
 								free(canonical);
 								free(uraw);
 								free(lraw);
@@ -1784,7 +2148,8 @@ untrans_context(const char *incon, char **rcon) {
 					}
 					if (canonical)
 						free(canonical);
-					if (add_cache(domain, uraw, urange) < 0) {
+					if (add_cache(domain, uraw, urange) <
+					    0) {
 						free(uraw);
 						free(lraw);
 						free(range);
@@ -1792,8 +2157,9 @@ untrans_context(const char *incon, char **rcon) {
 					}
 				} else {
 					uraw = strdup(urange);
-					if (! uraw) {
-						log_error("strdup failed %s", strerror(errno));
+					if (!uraw) {
+						log_error("strdup failed %s",
+							  strerror(errno));
 						free(lraw);
 						free(range);
 						return -1;
@@ -1801,10 +2167,10 @@ untrans_context(const char *incon, char **rcon) {
 				}
 			}
 
-
 			if (strcmp(lraw, uraw) == 0) {
 				if (asprintf(&raw, "%s", lraw) < 0) {
-					log_error("asprintf failed %s", strerror(errno));
+					log_error("asprintf failed %s",
+						  strerror(errno));
 					free(uraw);
 					free(lraw);
 					free(range);
@@ -1812,7 +2178,8 @@ untrans_context(const char *incon, char **rcon) {
 				}
 			} else {
 				if (asprintf(&raw, "%s-%s", lraw, uraw) < 0) {
-					log_error("asprintf failed %s", strerror(errno));
+					log_error("asprintf failed %s",
+						  strerror(errno));
 					free(uraw);
 					free(lraw);
 					free(range);
@@ -1845,31 +2212,39 @@ untrans_context(const char *incon, char **rcon) {
 	gettimeofday(&stopTime, 0);
 	long int ms;
 	if (startTime.tv_usec > stopTime.tv_usec)
-		ms = (stopTime.tv_sec - startTime.tv_sec - 1) * 1000 + (stopTime.tv_usec/1000 + 1000 - startTime.tv_usec/1000);
+		ms = (stopTime.tv_sec - startTime.tv_sec - 1) * 1000 +
+		     (stopTime.tv_usec / 1000 + 1000 -
+		      startTime.tv_usec / 1000);
 	else
-		ms = (stopTime.tv_sec - startTime.tv_sec    ) * 1000 + (stopTime.tv_usec/1000        - startTime.tv_usec/1000);
+		ms = (stopTime.tv_sec - startTime.tv_sec) * 1000 +
+		     (stopTime.tv_usec / 1000 - startTime.tv_usec / 1000);
 
-	log_debug(" untrans_context input='%s' output='%s' n %ld ms\n", incon, *rcon, ms);
+	log_debug(" untrans_context input='%s' output='%s' n %ld ms\n", incon,
+		  *rcon, ms);
 #endif
 	return 0;
 }
 
-void
-finish_context_translations(void) {
-	while(domains) {
+void finish_context_translations(void)
+{
+	parser_domain = NULL;
+	group = NULL;
+	base_classification = 0;
+	lineno = 0;
+
+	while (domains) {
 		domain_t *next = domains->next;
 		destroy_domain(domains);
 		domains = next;
 	}
-	while(sens_constraints) {
+	while (sens_constraints) {
 		sens_constraint_t *next = sens_constraints->next;
 		destroy_sens_constraint(&sens_constraints, sens_constraints);
 		sens_constraints = next;
 	}
-	while(cat_constraints) {
+	while (cat_constraints) {
 		cat_constraint_t *next = cat_constraints->next;
 		destroy_cat_constraint(&cat_constraints, cat_constraints);
 		cat_constraints = next;
 	}
 }
-

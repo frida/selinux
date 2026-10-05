@@ -38,7 +38,7 @@
 void *cil_malloc(size_t size)
 {
 	void *mem = malloc(size);
-	if (mem == NULL){
+	if (mem == NULL) {
 		if (size == 0) {
 			return NULL;
 		}
@@ -52,7 +52,7 @@ void *cil_malloc(size_t size)
 void *cil_calloc(size_t num_elements, size_t element_size)
 {
 	void *mem = calloc(num_elements, element_size);
-	if (mem == NULL){
+	if (mem == NULL) {
 		cil_log(CIL_ERR, "Failed to allocate memory\n");
 		exit(1);
 	}
@@ -63,7 +63,7 @@ void *cil_calloc(size_t num_elements, size_t element_size)
 void *cil_realloc(void *ptr, size_t size)
 {
 	void *mem = realloc(ptr, size);
-	if (mem == NULL){
+	if (mem == NULL) {
 		if (size == 0) {
 			return NULL;
 		}
@@ -74,6 +74,17 @@ void *cil_realloc(void *ptr, size_t size)
 	return mem;
 }
 
+void *cil_reallocarray(void *ptr, size_t nmemb, size_t size)
+{
+	size_t array_size;
+
+	if (__builtin_mul_overflow(nmemb, size, &array_size)) {
+		cil_log(CIL_ERR, "Overflow\n");
+		exit(1);
+	}
+
+	return cil_realloc(ptr, array_size);
+}
 
 char *cil_strdup(const char *str)
 {
@@ -92,7 +103,8 @@ char *cil_strdup(const char *str)
 	return mem;
 }
 
-__attribute__ ((format (printf, 2, 3))) int cil_asprintf(char **strp, const char *fmt, ...)
+__attribute__((format(printf, 2, 3))) int cil_asprintf(char **strp,
+						       const char *fmt, ...)
 {
 	int rc;
 	va_list ap;

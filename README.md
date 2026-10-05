@@ -6,6 +6,7 @@ SELinux Userspace
 [![Run SELinux testsuite in Testing Farm](https://github.com/SELinuxProject/selinux/actions/workflows/tf_testsuite.yml/badge.svg)](https://github.com/SELinuxProject/selinux/actions/workflows/tf_testsuite.yml)
 [![OSS-Fuzz Status](https://oss-fuzz-build-logs.storage.googleapis.com/badges/selinux.svg)](https://oss-fuzz-build-logs.storage.googleapis.com/index.html#selinux)
 [![CIFuzz Status](https://github.com/SELinuxProject/selinux/actions/workflows/cifuzz.yml/badge.svg)](https://github.com/SELinuxProject/selinux/actions/workflows/cifuzz.yml)
+[![Check Format](https://github.com/SELinuxProject/selinux/actions/workflows/check_format.yml/badge.svg)](https://github.com/SELinuxProject/selinux/actions/workflows/check_format.yml)
 
 SELinux is a flexible Mandatory Access Control (MAC) system built into the
 Linux Kernel. SELinux provides administrators with a comprehensive access
@@ -22,6 +23,69 @@ Archives of the mailing list are available at https://lore.kernel.org/selinux.
 See the [SELinux Userspace wiki](https://github.com/SELinuxProject/selinux/wiki)
 for more information.
 
+Minimum Supported Kernel Version
+--------------------------------
+The minimum supported kernel version is Linux v4.3 to match the
+minimum supported kernel policy version by libsepol.
+
+Note that the policy build toolchain (e.g. libsepol, checkpolicy,
+checkmodule, secilc, semodule_package/expand/link) does not link with
+libselinux or have any other runtime dependencies on a particular
+Linux kernel version. The policy build toolchain has in the past
+successfully been built and run on non-Linux platforms as well
+(e.g. macOS), although this is not officially supported.
+
+Minimum Supported Policy Versions
+---------------------------------
+The minimum kernel policy version is 30 (xperms_ioctl for SELinux,
+xen_devicetree for Xen). Support for this policy version first shipped
+in libsepol 2.5 (userspace release 20160223), Linux v4.3, and Xen
+4.6. libsepol dropped support for kernel policy versions older than 30
+starting with libsepol 3.12.
+
+The minimum modular policy version is 18 (xperms_ioctl). Support for
+this modular policy version first shipped in libsepol 2.7 (userspace
+release 20170804). libsepol dropped support for modular policies older
+than 18 starting with libsepol 3.12.
+
+These minimum policy versions in libsepol affect:
+1. The policy build toolchain. For example, checkpolicy, checkmodule,
+and secilc cannot generate a policy with a version less than the
+minimum.
+2. libselinux and its users. For example, libselinux cannot downgrade a
+policy file to a version less than the minimum, and libsemanage cannot
+read a binary policy module that was compiled with a version less than
+the minimum.
+3. SELinux policy analysis tools. For example, setools cannot read a
+policy with a version less the minimum.
+4. The Xen hypervisor, which compiles its XSM/Flask policies using
+checkpolicy, and only currently supports kernel policy version 30 for
+the Xen target. Xen does not use binary policy modules so it is
+unaffected by changes to the minimum modular policy version.
+5. Android, which is on kernel policy version 30. There has not been
+any need for newer policy version features yet. Android does not use
+binary policy modules so it is unaffected by changes to the minimum
+modular policy version.
+
+Increasing the minimum kernel policy version for libsepol therefore
+prevents generating, loading, or analyzing policies for Linux kernels
+or Xen hypervisors that only support a kernel policy version lower
+than the new minimum. The minimum kernel policy version should only
+be increased when there are no still-supported versions of the Linux
+kernel and Xen hypervisor that require a lower kernel policy version.
+
+Increasing the minimum modular policy version for libsepol prevents
+generating binary modules for distribution releases that only support
+a modular policy version lower than the new minimum, and also prevents
+reading and hence using binary modules that were built with a version
+lower than the new minimum. This could affect modules originally built
+under an older release and carried forward through system upgrades.
+The minimum modular policy version should only be increased when there
+are no still-supported Linux distributions that require a lower
+modular policy version _and_ any binary modules carried forward
+through system upgrades can reasonably be assumed to have required a
+rebuild anyway due to major changes to the system policy headers.
+
 Installation
 ------------
 
@@ -33,6 +97,7 @@ SELinux libraries and tools are packaged in several Linux distributions:
 * Debian and Ubuntu (https://packages.debian.org/sid/policycoreutils)
 * Gentoo (https://packages.gentoo.org/packages/sys-apps/policycoreutils)
 * RHEL and Fedora (https://src.fedoraproject.org/rpms/policycoreutils)
+* SLES and openSUSE (https://src.opensuse.org/pool/policycoreutils)
 * Yocto Project (http://git.yoctoproject.org/cgit/cgit.cgi/meta-selinux/tree/recipes-security/selinux)
 * and many more (https://repology.org/project/policycoreutils/versions)
 
@@ -63,6 +128,7 @@ dnf install \
 
 # For Python and Ruby bindings
 dnf install \
+    python3-build \
     python3-devel \
     python3-pip \
     python3-setuptools \
@@ -96,6 +162,7 @@ apt-get install --no-install-recommends --no-install-suggests \
 
 # For Python and Ruby bindings
 apt-get install --no-install-recommends --no-install-suggests \
+    python3-build \
     python3-dev \
     python3-pip \
     python3-setuptools \
@@ -148,6 +215,10 @@ set when overriding are:
 - -fno-semantic-interposition for gcc or compilers that do not do this. clang does this by default. clang-10 and up
    will support passing this flag, but ignore it. Previous clang versions fail.
 
+## Setting EXTRA_LD_FLAGS
+
+Build with EXTRA_LD_FLAGS=--undefined-version to fix linking against
+musl with llvm.
 
 macOS
 -----

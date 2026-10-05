@@ -39,6 +39,7 @@ static char *my_qstrdup (char * s);
 #.*               /* ignore comments */
 module-store      return MODULE_STORE;
 store-root        return STORE_ROOT;
+ro-store-root     return RO_STORE_ROOT;
 compiler-directory	return COMPILER_DIR;
 ignore-module-cache return IGNORE_MODULE_CACHE;
 policy-version    return VERSION;
@@ -57,6 +58,7 @@ remove-hll	return REMOVE_HLL;
 relabel_store	return RELABEL_STORE;
 optimize-policy return OPTIMIZE_POLICY;
 multiple-decls return MULTIPLE_DECLS;
+sort-local-fcontexts return SORT_LOCAL_FCONTEXTS;
 "[load_policy]"   return LOAD_POLICY_START;
 "[setfiles]"      return SETFILES_START;
 "[sefcontext_compile]"      return SEFCONTEXT_COMPILE_START;

@@ -34,13 +34,13 @@
 #include "cil_mem.h"
 #include "cil_stack.h"
 
-
 #define CIL_STACK_INIT_SIZE 16
 
 void cil_stack_init(struct cil_stack **stack)
 {
 	struct cil_stack *new_stack = cil_malloc(sizeof(*new_stack));
-	new_stack->stack = cil_malloc(sizeof(*(new_stack->stack)) * CIL_STACK_INIT_SIZE);
+	new_stack->stack =
+		cil_malloc(sizeof(*(new_stack->stack)) * CIL_STACK_INIT_SIZE);
 	new_stack->size = CIL_STACK_INIT_SIZE;
 	new_stack->pos = -1;
 	*stack = new_stack;
@@ -77,8 +77,12 @@ void cil_stack_push(struct cil_stack *stack, enum cil_flavor flavor, void *data)
 	stack->pos++;
 
 	if (stack->pos == stack->size) {
-		stack->size *= 2;
-		stack->stack = cil_realloc(stack->stack, sizeof(*stack->stack) * stack->size);
+		if (__builtin_smul_overflow(stack->size, 2, &stack->size)) {
+			cil_log(CIL_ERR, "Overflow\n");
+			exit(1);
+		}
+		stack->stack = cil_reallocarray(stack->stack, stack->size,
+						sizeof(*stack->stack));
 	}
 
 	stack->stack[stack->pos].flavor = flavor;

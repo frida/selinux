@@ -7,12 +7,6 @@
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
-#ifndef IPPROTO_DCCP
-#define IPPROTO_DCCP 33
-#endif
-#ifndef IPPROTO_SCTP
-#define IPPROTO_SCTP 132
-#endif
 
 #include <sepol/policydb/ebitmap.h>
 #include <sepol/policydb/hashtab.h>
@@ -21,7 +15,6 @@
 #include "debug.h"
 #include "private.h"
 #include "kernel_to_common.h"
-
 
 void sepol_indent(FILE *out, int indent)
 {
@@ -118,14 +111,19 @@ int strs_add(struct strs *strs, char *s)
 	if (strs->num + 1 > strs->size) {
 		char **new;
 		size_t i = strs->size;
-		strs->size *= 2;
-		new = reallocarray(strs->list, strs->size, sizeof(char *));
+		size_t new_size;
+		if (__builtin_mul_overflow(strs->size, 2, &new_size)) {
+			ERR(NULL, "Overflow");
+			return -1;
+		}
+		new = reallocarray(strs->list, new_size, sizeof(char *));
 		if (!new) {
 			ERR(NULL, "Out of memory");
 			return -1;
 		}
 		strs->list = new;
-		memset(&strs->list[i], 0, sizeof(char *)*(strs->size-i));
+		strs->size = new_size;
+		memset(&strs->list[i], 0, sizeof(char *) * (strs->size - i));
 	}
 
 	strs->list[strs->num] = s;
@@ -173,21 +171,26 @@ int strs_add_at_index(struct strs *strs, char *s, size_t index)
 	if (index >= strs->size) {
 		char **new;
 		size_t i = strs->size;
-		while (index >= strs->size) {
-			strs->size *= 2;
+		size_t new_size = strs->size;
+		while (index >= new_size) {
+			if (__builtin_mul_overflow(new_size, 2, &new_size)) {
+				ERR(NULL, "Overflow");
+				return -1;
+			}
 		}
-		new = reallocarray(strs->list, strs->size, sizeof(char *));
+		new = reallocarray(strs->list, new_size, sizeof(char *));
 		if (!new) {
 			ERR(NULL, "Out of memory");
 			return -1;
 		}
 		strs->list = new;
-		memset(&strs->list[i], 0, sizeof(char *)*(strs->size - i));
+		strs->size = new_size;
+		memset(&strs->list[i], 0, sizeof(char *) * (strs->size - i));
 	}
 
 	strs->list[index] = s;
 	if (index >= strs->num) {
-		strs->num = index+1;
+		strs->num = index + 1;
 	}
 
 	return 0;
@@ -206,7 +209,7 @@ static int strs_cmp(const void *a, const void *b)
 {
 	char *const *aa = a;
 	char *const *bb = b;
-	return strcmp(*aa,*bb);
+	return strcmp(*aa, *bb);
 }
 
 void strs_sort(struct strs *strs)
@@ -227,9 +230,12 @@ size_t strs_len_items(const struct strs *strs)
 	unsigned i;
 	size_t len = 0;
 
-	for (i=0; i<strs->num; i++) {
-		if (!strs->list[i]) continue;
-		len += strlen(strs->list[i]);
+	for (i = 0; i < strs->num; i++) {
+		if (!strs->list[i])
+			continue;
+		if (__builtin_add_overflow(len, strlen(strs->list[i]), &len)) {
+			return SIZE_MAX;
+		}
 	}
 
 	return len;
@@ -248,7 +254,10 @@ char *strs_to_str(const struct strs *strs)
 	}
 
 	/* strs->num added because either ' ' or '\0' follows each item */
-	len = strs_len_items(strs) + strs->num;
+	if (__builtin_add_overflow(strs_len_items(strs), strs->num, &len)) {
+		ERR(NULL, "Overflow");
+		goto exit;
+	}
 	str = malloc(len);
 	if (!str) {
 		ERR(NULL, "Out of memory");
@@ -256,10 +265,11 @@ char *strs_to_str(const struct strs *strs)
 	}
 
 	p = str;
-	for (i=0; i<strs->num; i++) {
-		if (!strs->list[i]) continue;
+	for (i = 0; i < strs->num; i++) {
+		if (!strs->list[i])
+			continue;
 		len = strlen(strs->list[i]);
-		rc = snprintf(p, len+1, "%s", strs->list[i]);
+		rc = snprintf(p, len + 1, "%s", strs->list[i]);
 		if (rc < 0 || rc > (int)len) {
 			free(str);
 			str = NULL;
@@ -281,11 +291,11 @@ void strs_write_each(const struct strs *strs, FILE *out)
 {
 	unsigned i;
 
-	for (i=0; i<strs->num; i++) {
+	for (i = 0; i < strs->num; i++) {
 		if (!strs->list[i]) {
 			continue;
 		}
-		sepol_printf(out, "%s\n",strs->list[i]);
+		sepol_printf(out, "%s\n", strs->list[i]);
 	}
 }
 
@@ -293,12 +303,12 @@ void strs_write_each_indented(const struct strs *strs, FILE *out, int indent)
 {
 	unsigned i;
 
-	for (i=0; i<strs->num; i++) {
+	for (i = 0; i < strs->num; i++) {
 		if (!strs->list[i]) {
 			continue;
 		}
 		sepol_indent(out, indent);
-		sepol_printf(out, "%s\n",strs->list[i]);
+		sepol_printf(out, "%s\n", strs->list[i]);
 	}
 }
 
@@ -307,10 +317,11 @@ int hashtab_ordered_to_strs(char *key, void *data, void *args)
 	struct strs *strs = (struct strs *)args;
 	symtab_datum_t *datum = data;
 
-	return strs_add_at_index(strs, key, datum->value-1);
+	return strs_add_at_index(strs, key, datum->value - 1);
 }
 
-int ebitmap_to_strs(const struct ebitmap *map, struct strs *strs, char **val_to_name)
+int ebitmap_to_strs(const struct ebitmap *map, struct strs *strs,
+		    char **val_to_name)
 {
 	struct ebitmap_node *node;
 	uint32_t i;
@@ -382,7 +393,8 @@ int strs_stack_empty(const struct strs *stack)
 	return strs_num_items(stack) == 0;
 }
 
-struct strs *isids_to_strs(const char *const *sid_to_str, unsigned num_sids, struct ocontext *isids)
+struct strs *isids_to_strs(const char *const *sid_to_str, unsigned num_sids,
+			   struct ocontext *isids)
 {
 	struct ocontext *isid;
 	struct strs *strs;
@@ -391,7 +403,7 @@ struct strs *isids_to_strs(const char *const *sid_to_str, unsigned num_sids, str
 	unsigned i, max;
 	int rc;
 
-	rc = strs_init(&strs, num_sids+1);
+	rc = strs_init(&strs, num_sids + 1);
 	if (rc != 0) {
 		goto exit;
 	}
@@ -404,7 +416,7 @@ struct strs *isids_to_strs(const char *const *sid_to_str, unsigned num_sids, str
 		}
 	}
 
-	for (i=1; i <= max; i++) {
+	for (i = 1; i <= max; i++) {
 		if (i < num_sids && sid_to_str[i]) {
 			sid = strdup(sid_to_str[i]);
 		} else {
@@ -434,8 +446,8 @@ static int compare_ranges(uint64_t l1, uint64_t h1, uint64_t l2, uint64_t h2)
 {
 	uint64_t d1, d2;
 
-	d1 = h1-l1;
-	d2 = h2-l2;
+	d1 = h1 - l1;
+	d2 = h2 - l2;
 
 	if (d1 < d2) {
 		return -1;
@@ -531,14 +543,16 @@ static int node_data_cmp(const void *a, const void *b)
 	struct ocontext *const *bb = b;
 	int rc;
 
-	rc = memcmp(&(*aa)->u.node.mask, &(*bb)->u.node.mask, sizeof((*aa)->u.node.mask));
+	rc = memcmp(&(*aa)->u.node.mask, &(*bb)->u.node.mask,
+		    sizeof((*aa)->u.node.mask));
 	if (rc > 0) {
 		return -1;
 	} else if (rc < 0) {
 		return 1;
 	}
 
-	return memcmp(&(*aa)->u.node.addr, &(*bb)->u.node.addr, sizeof((*aa)->u.node.addr));
+	return memcmp(&(*aa)->u.node.addr, &(*bb)->u.node.addr,
+		      sizeof((*aa)->u.node.addr));
 }
 
 static int node6_data_cmp(const void *a, const void *b)
@@ -547,14 +561,16 @@ static int node6_data_cmp(const void *a, const void *b)
 	struct ocontext *const *bb = b;
 	int rc;
 
-	rc = memcmp(&(*aa)->u.node6.mask, &(*bb)->u.node6.mask, sizeof((*aa)->u.node6.mask));
+	rc = memcmp(&(*aa)->u.node6.mask, &(*bb)->u.node6.mask,
+		    sizeof((*aa)->u.node6.mask));
 	if (rc > 0) {
 		return -1;
 	} else if (rc < 0) {
 		return 1;
 	}
 
-	return memcmp(&(*aa)->u.node6.addr, &(*bb)->u.node6.addr, sizeof((*aa)->u.node6.addr));
+	return memcmp(&(*aa)->u.node6.addr, &(*bb)->u.node6.addr,
+		      sizeof((*aa)->u.node6.addr));
 }
 
 static int ibpkey_data_cmp(const void *a, const void *b)
@@ -563,12 +579,15 @@ static int ibpkey_data_cmp(const void *a, const void *b)
 	struct ocontext *const *aa = a;
 	struct ocontext *const *bb = b;
 
-	rc = (*aa)->u.ibpkey.subnet_prefix - (*bb)->u.ibpkey.subnet_prefix;
+	rc = spaceship_cmp((*aa)->u.ibpkey.subnet_prefix,
+			   (*bb)->u.ibpkey.subnet_prefix);
 	if (rc)
 		return rc;
 
-	return compare_ranges((*aa)->u.ibpkey.low_pkey, (*aa)->u.ibpkey.high_pkey,
-			      (*bb)->u.ibpkey.low_pkey, (*bb)->u.ibpkey.high_pkey);
+	return compare_ranges((*aa)->u.ibpkey.low_pkey,
+			      (*aa)->u.ibpkey.high_pkey,
+			      (*bb)->u.ibpkey.low_pkey,
+			      (*bb)->u.ibpkey.high_pkey);
 }
 
 static int ibendport_data_cmp(const void *a, const void *b)
@@ -603,8 +622,10 @@ static int ioport_data_cmp(const void *a, const void *b)
 	struct ocontext *const *aa = a;
 	struct ocontext *const *bb = b;
 
-	return compare_ranges((*aa)->u.ioport.low_ioport, (*aa)->u.ioport.high_ioport,
-			      (*bb)->u.ioport.low_ioport, (*bb)->u.ioport.high_ioport);
+	return compare_ranges((*aa)->u.ioport.low_ioport,
+			      (*aa)->u.ioport.high_ioport,
+			      (*bb)->u.ioport.low_ioport,
+			      (*bb)->u.ioport.high_ioport);
 }
 
 static int iomem_data_cmp(const void *a, const void *b)
@@ -612,8 +633,10 @@ static int iomem_data_cmp(const void *a, const void *b)
 	struct ocontext *const *aa = a;
 	struct ocontext *const *bb = b;
 
-	return compare_ranges((*aa)->u.iomem.low_iomem, (*aa)->u.iomem.high_iomem,
-			      (*bb)->u.iomem.low_iomem, (*bb)->u.iomem.high_iomem);
+	return compare_ranges((*aa)->u.iomem.low_iomem,
+			      (*aa)->u.iomem.high_iomem,
+			      (*bb)->u.iomem.low_iomem,
+			      (*bb)->u.iomem.high_iomem);
 }
 
 static int pcid_data_cmp(const void *a, const void *b)
@@ -638,7 +661,8 @@ static int dtree_data_cmp(const void *a, const void *b)
 	return strcmp((*aa)->u.name, (*bb)->u.name);
 }
 
-static int sort_ocontext_data(struct ocontext **ocons, int (*cmp)(const void *, const void *))
+static int sort_ocontext_data(struct ocontext **ocons,
+			      int (*cmp)(const void *, const void *))
 {
 	struct ocontext *ocon;
 	struct ocontext **data;
@@ -668,10 +692,10 @@ static int sort_ocontext_data(struct ocontext **ocons, int (*cmp)(const void *, 
 	qsort(data, num, sizeof(*data), cmp);
 
 	*ocons = data[0];
-	for (i=1; i < num; i++) {
-		data[i-1]->next = data[i];
+	for (i = 1; i < num; i++) {
+		data[i - 1]->next = data[i];
 	}
-	data[num-1]->next = NULL;
+	data[num - 1]->next = NULL;
 
 	free(data);
 
@@ -708,12 +732,14 @@ int sort_ocontexts(struct policydb *pdb)
 			goto exit;
 		}
 
-		rc = sort_ocontext_data(&pdb->ocontexts[OCON_IBPKEY], ibpkey_data_cmp);
+		rc = sort_ocontext_data(&pdb->ocontexts[OCON_IBPKEY],
+					ibpkey_data_cmp);
 		if (rc != 0) {
 			goto exit;
 		}
 
-		rc = sort_ocontext_data(&pdb->ocontexts[OCON_IBENDPORT], ibendport_data_cmp);
+		rc = sort_ocontext_data(&pdb->ocontexts[OCON_IBENDPORT],
+					ibendport_data_cmp);
 		if (rc != 0) {
 			goto exit;
 		}
@@ -750,4 +776,19 @@ exit:
 	}
 
 	return rc;
+}
+
+int check_for_supported_policy(struct policydb *pdb)
+{
+	if (pdb == NULL) {
+		ERR(NULL, "No policy");
+		return -1;
+	}
+
+	if (pdb->policy_type != SEPOL_POLICY_KERN) {
+		ERR(NULL, "Policy is not a kernel policy");
+		return -1;
+	}
+
+	return 0;
 }

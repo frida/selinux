@@ -3,6 +3,7 @@
  */
 
 #include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -12,6 +13,8 @@
 #include "callbacks.h"
 #include "mapping.h"
 #include "selinux_internal.h"
+
+#define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
 
 /*
  * Class and permission mappings
@@ -30,12 +33,10 @@ static security_class_t current_mapping_size = 0;
  * Mapping setting function
  */
 
-int
-selinux_set_mapping(const struct security_class_mapping *map)
+int selinux_set_mapping(const struct security_class_mapping *map)
 {
 	size_t size = sizeof(struct selinux_mapping);
-	security_class_t i, j;
-	unsigned k;
+	unsigned int i, j, k;
 	bool print_unknown_handle = false;
 	bool reject = (security_reject_unknown() == 1);
 	bool deny = (security_deny_unknown() == 1);
@@ -55,6 +56,10 @@ selinux_set_mapping(const struct security_class_mapping *map)
 	i = 0;
 	while (map[i].name)
 		i++;
+	if (i >= USHRT_MAX) {
+		errno = EINVAL;
+		goto err;
+	}
 
 	/* Allocate space for the class records, plus one for class zero */
 	current_mapping = (struct selinux_mapping *)calloc(++i, size);
@@ -69,9 +74,10 @@ selinux_set_mapping(const struct security_class_mapping *map)
 
 		p_out->value = string_to_security_class(p_in->name);
 		if (!p_out->value) {
-			selinux_log(SELINUX_INFO,
-				    "SELinux: Class %s not defined in policy.\n",
-				    p_in->name);
+			selinux_log(
+				SELINUX_INFO,
+				"SELinux: Class %s not defined in policy.\n",
+				p_in->name);
 			if (reject)
 				goto err2;
 			p_out->num_perms = 0;
@@ -79,32 +85,31 @@ selinux_set_mapping(const struct security_class_mapping *map)
 			continue;
 		}
 
-		k = 0;
-		while (p_in->perms[k]) {
+		for (k = 0; k < ARRAY_SIZE(p_out->perms) && p_in->perms[k];
+		     k++) {
 			/* An empty permission string skips ahead */
-			if (!*p_in->perms[k]) {
-				k++;
+			if (!*p_in->perms[k])
 				continue;
-			}
-			p_out->perms[k] = string_to_av_perm(p_out->value,
-							    p_in->perms[k]);
+			p_out->perms[k] =
+				string_to_av_perm(p_out->value, p_in->perms[k]);
 			if (!p_out->perms[k]) {
-				selinux_log(SELINUX_INFO,
-					    "SELinux:  Permission %s in class %s not defined in policy.\n",
-					    p_in->perms[k], p_in->name);
+				selinux_log(
+					SELINUX_INFO,
+					"SELinux: Permission %s in class %s not defined in policy.\n",
+					p_in->perms[k], p_in->name);
 				if (reject)
 					goto err2;
 				print_unknown_handle = true;
 			}
-			k++;
 		}
 		p_out->num_perms = k;
 	}
 
 	if (print_unknown_handle)
-		selinux_log(SELINUX_INFO,
-			    "SELinux: the above unknown classes and permissions will be %s\n",
-			    deny ? "denied" : "allowed");
+		selinux_log(
+			SELINUX_INFO,
+			"SELinux: the above unknown classes and permissions will be %s\n",
+			deny ? "denied" : "allowed");
 
 	/* Set the mapping size here so the above lookups are "raw" */
 	current_mapping_size = i;
@@ -121,8 +126,7 @@ err:
  * Get real, kernel values from mapped values
  */
 
-security_class_t
-unmap_class(security_class_t tclass)
+security_class_t unmap_class(security_class_t tclass)
 {
 	if (tclass < current_mapping_size)
 		return current_mapping[tclass].value;
@@ -131,22 +135,20 @@ unmap_class(security_class_t tclass)
 	if (current_mapping_size != 0) {
 		errno = EINVAL;
 		return 0;
-	}
-	else
+	} else
 		return tclass;
 }
 
-access_vector_t
-unmap_perm(security_class_t tclass, access_vector_t tperm)
+access_vector_t unmap_perm(security_class_t tclass, access_vector_t tperm)
 {
 	if (tclass < current_mapping_size) {
 		unsigned i;
 		access_vector_t kperm = 0;
 
 		for (i = 0; i < current_mapping[tclass].num_perms; i++)
-			if (tperm & (UINT32_C(1)<<i)) {
+			if (tperm & (UINT32_C(1) << i)) {
 				kperm |= current_mapping[tclass].perms[i];
-				tperm &= ~(UINT32_C(1)<<i);
+				tperm &= ~(UINT32_C(1) << i);
 			}
 		return kperm;
 	}
@@ -155,8 +157,7 @@ unmap_perm(security_class_t tclass, access_vector_t tperm)
 	if (current_mapping_size != 0) {
 		errno = EINVAL;
 		return 0;
-	}
-	else
+	} else
 		return tperm;
 }
 
@@ -164,8 +165,7 @@ unmap_perm(security_class_t tclass, access_vector_t tperm)
  * Get mapped values from real, kernel values
  */
 
-security_class_t
-map_class(security_class_t kclass)
+security_class_t map_class(security_class_t kclass)
 {
 	security_class_t i;
 
@@ -173,17 +173,15 @@ map_class(security_class_t kclass)
 		if (current_mapping[i].value == kclass)
 			return i;
 
-/* If here no mapping set or the class requested is not valid. */
+	/* If here no mapping set or the class requested is not valid. */
 	if (current_mapping_size != 0) {
 		errno = EINVAL;
 		return 0;
-	}
-	else
+	} else
 		return kclass;
 }
 
-access_vector_t
-map_perm(security_class_t tclass, access_vector_t kperm)
+access_vector_t map_perm(security_class_t tclass, access_vector_t kperm)
 {
 	if (tclass < current_mapping_size) {
 		unsigned i;
@@ -191,22 +189,20 @@ map_perm(security_class_t tclass, access_vector_t kperm)
 
 		for (i = 0; i < current_mapping[tclass].num_perms; i++)
 			if (kperm & current_mapping[tclass].perms[i]) {
-				tperm |= UINT32_C(1)<<i;
+				tperm |= UINT32_C(1) << i;
 				kperm &= ~current_mapping[tclass].perms[i];
 			}
 
 		if (tperm == 0) {
 			errno = EINVAL;
 			return 0;
-		}
-		else
+		} else
 			return tperm;
 	}
 	return kperm;
 }
 
-void
-map_decision(security_class_t tclass, struct av_decision *avd)
+void map_decision(security_class_t tclass, struct av_decision *avd)
 {
 	if (tclass < current_mapping_size) {
 		bool allow_unknown = (security_deny_unknown() == 0);
@@ -216,30 +212,30 @@ map_decision(security_class_t tclass, struct av_decision *avd)
 
 		for (i = 0, result = 0; i < n; i++) {
 			if (avd->allowed & mapping->perms[i])
-				result |= UINT32_C(1)<<i;
+				result |= UINT32_C(1) << i;
 			else if (allow_unknown && !mapping->perms[i])
-				result |= UINT32_C(1)<<i;
+				result |= UINT32_C(1) << i;
 		}
 		avd->allowed = result;
 
 		for (i = 0, result = 0; i < n; i++) {
 			if (avd->decided & mapping->perms[i])
-				result |= UINT32_C(1)<<i;
+				result |= UINT32_C(1) << i;
 			else if (allow_unknown && !mapping->perms[i])
-				result |= UINT32_C(1)<<i;
+				result |= UINT32_C(1) << i;
 		}
 		avd->decided = result;
 
 		for (i = 0, result = 0; i < n; i++)
 			if (avd->auditallow & mapping->perms[i])
-				result |= UINT32_C(1)<<i;
+				result |= UINT32_C(1) << i;
 		avd->auditallow = result;
 
 		for (i = 0, result = 0; i < n; i++) {
 			if (avd->auditdeny & mapping->perms[i])
-				result |= UINT32_C(1)<<i;
+				result |= UINT32_C(1) << i;
 			else if (!allow_unknown && !mapping->perms[i])
-				result |= UINT32_C(1)<<i;
+				result |= UINT32_C(1) << i;
 		}
 
 		/*
@@ -247,8 +243,8 @@ map_decision(security_class_t tclass, struct av_decision *avd)
 		 * beyond the mapping->num_perms since this indicates
 		 * a bug in the object manager.
 		 */
-		for (; i < (sizeof(result)*8); i++)
-			result |= UINT32_C(1)<<i;
+		for (; i < (sizeof(result) * 8); i++)
+			result |= UINT32_C(1) << i;
 		avd->auditdeny = result;
 	}
 }

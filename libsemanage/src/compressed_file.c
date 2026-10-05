@@ -20,6 +20,7 @@
  *  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -34,17 +35,17 @@
 #include "debug.h"
 
 #define BZ2_MAGICSTR "BZh"
-#define BZ2_MAGICLEN (sizeof(BZ2_MAGICSTR)-1)
+#define BZ2_MAGICLEN (sizeof(BZ2_MAGICSTR) - 1)
 
 /* bzip() a data to a file, returning the total number of compressed bytes
  * in the file.  Returns -1 if file could not be compressed. */
 static int bzip(semanage_handle_t *sh, const char *filename, void *data,
 		size_t num_bytes)
 {
-	BZFILE* b;
-	size_t  size = 1<<16;
-	int     bzerror;
-	size_t  total = 0;
+	BZFILE *b;
+	size_t size = 1 << 16;
+	int bzerror;
+	size_t total = 0;
 	size_t len;
 	FILE *f;
 
@@ -61,29 +62,29 @@ static int bzip(semanage_handle_t *sh, const char *filename, void *data,
 		return 0;
 	}
 
-	b = BZ2_bzWriteOpen( &bzerror, f, sh->conf->bzip_blocksize, 0, 0);
+	b = BZ2_bzWriteOpen(&bzerror, f, sh->conf->bzip_blocksize, 0, 0);
 	if (bzerror != BZ_OK) {
-		BZ2_bzWriteClose ( &bzerror, b, 1, 0, 0 );
+		BZ2_bzWriteClose(&bzerror, b, 1, NULL, NULL);
 		fclose(f);
 		return -1;
 	}
 
-	while ( num_bytes > total ) {
+	while (num_bytes > total) {
 		if (num_bytes - total > size) {
 			len = size;
 		} else {
 			len = num_bytes - total;
 		}
-		BZ2_bzWrite ( &bzerror, b, (uint8_t *)data + total, len );
+		BZ2_bzWrite(&bzerror, b, (uint8_t *)data + total, len);
 		if (bzerror == BZ_IO_ERROR) {
-			BZ2_bzWriteClose ( &bzerror, b, 1, 0, 0 );
+			BZ2_bzWriteClose(&bzerror, b, 1, NULL, NULL);
 			fclose(f);
 			return -1;
 		}
 		total += len;
 	}
 
-	BZ2_bzWriteClose ( &bzerror, b, 0, 0, 0 );
+	BZ2_bzWriteClose(&bzerror, b, 0, NULL, NULL);
 	fclose(f);
 	if (bzerror == BZ_IO_ERROR) {
 		return -1;
@@ -95,16 +96,16 @@ static int bzip(semanage_handle_t *sh, const char *filename, void *data,
  * in the file.  Returns -1 if file could not be decompressed. */
 static ssize_t bunzip(semanage_handle_t *sh, FILE *f, void **data)
 {
-	BZFILE*  b = NULL;
-	size_t   nBuf;
-	uint8_t* buf = NULL;
-	size_t   size = 1<<18;
-	size_t   bufsize = size;
-	int      bzerror;
-	size_t   total = 0;
-	uint8_t* uncompress = NULL;
-	uint8_t* tmpalloc = NULL;
-	ssize_t  ret = -1;
+	BZFILE *b = NULL;
+	size_t nBuf;
+	uint8_t *buf = NULL;
+	size_t size = 1 << 18;
+	size_t bufsize = size;
+	int bzerror;
+	size_t total = 0;
+	uint8_t *uncompress = NULL;
+	uint8_t *tmpalloc = NULL;
+	ssize_t ret = -1;
 
 	buf = malloc(bufsize);
 	if (buf == NULL) {
@@ -120,12 +121,13 @@ static ssize_t bunzip(semanage_handle_t *sh, FILE *f, void **data)
 		goto exit;
 	}
 
-	if ((bzerror != BZ2_MAGICLEN) || memcmp(buf, BZ2_MAGICSTR, BZ2_MAGICLEN)) {
+	if ((bzerror != BZ2_MAGICLEN) ||
+	    memcmp(buf, BZ2_MAGICSTR, BZ2_MAGICLEN)) {
 		goto exit;
 	}
 
-	b = BZ2_bzReadOpen ( &bzerror, f, 0, sh->conf->bzip_small, NULL, 0 );
-	if ( bzerror != BZ_OK ) {
+	b = BZ2_bzReadOpen(&bzerror, f, 0, sh->conf->bzip_small, NULL, 0);
+	if (bzerror != BZ_OK) {
 		ERR(sh, "Failure opening bz2 archive.");
 		goto exit;
 	}
@@ -136,10 +138,18 @@ static ssize_t bunzip(semanage_handle_t *sh, FILE *f, void **data)
 		goto exit;
 	}
 
-	while ( bzerror == BZ_OK) {
-		nBuf = BZ2_bzRead ( &bzerror, b, buf, bufsize);
-		if (( bzerror == BZ_OK ) || ( bzerror == BZ_STREAM_END )) {
+	while (bzerror == BZ_OK) {
+		nBuf = BZ2_bzRead(&bzerror, b, buf, bufsize);
+		if ((bzerror == BZ_OK) || (bzerror == BZ_STREAM_END)) {
+			if (nBuf > (size_t)SSIZE_MAX - total) {
+				ERR(sh, "Decompressed data too large.");
+				goto exit;
+			}
 			if (total + nBuf > size) {
+				if (size > SIZE_MAX / 2) {
+					ERR(sh, "Decompressed data too large.");
+					goto exit;
+				}
 				size *= 2;
 				tmpalloc = realloc(uncompress, size);
 				if (tmpalloc == NULL) {
@@ -152,7 +162,7 @@ static ssize_t bunzip(semanage_handle_t *sh, FILE *f, void **data)
 			total += nBuf;
 		}
 	}
-	if ( bzerror != BZ_STREAM_END ) {
+	if (bzerror != BZ_STREAM_END) {
 		ERR(sh, "Failure reading bz2 archive.");
 		goto exit;
 	}
@@ -161,9 +171,9 @@ static ssize_t bunzip(semanage_handle_t *sh, FILE *f, void **data)
 	*data = uncompress;
 
 exit:
-	BZ2_bzReadClose ( &bzerror, b );
+	BZ2_bzReadClose(&bzerror, b);
 	free(buf);
-	if ( ret < 0 ) {
+	if (ret < 0) {
 		free(uncompress);
 	}
 	return ret;
@@ -197,8 +207,8 @@ int map_compressed_file(semanage_handle_t *sh, const char *path,
 	} else {
 		struct stat sb;
 		if (fstat(fd, &sb) == -1 ||
-		    (uncompress = mmap(NULL, sb.st_size, PROT_READ, MAP_PRIVATE, fd, 0)) ==
-		    MAP_FAILED) {
+		    (uncompress = mmap(NULL, sb.st_size, PROT_READ, MAP_PRIVATE,
+				       fd, 0)) == MAP_FAILED) {
 			ret = -1;
 		} else {
 			contents->data = uncompress;
@@ -222,8 +232,8 @@ void unmap_compressed_file(struct file_contents *contents)
 	}
 }
 
-int write_compressed_file(semanage_handle_t *sh, const char *path,
-			  void *data, size_t len)
+int write_compressed_file(semanage_handle_t *sh, const char *path, void *data,
+			  size_t len)
 {
 	return bzip(sh, path, data, len);
 }

@@ -48,32 +48,32 @@
 
 #include "debug.h"
 #include "private.h"
-#include "android_m_compat.h"
 
 /* Based on MurmurHash3, written by Austin Appleby and placed in the
  * public domain.
  */
-ignore_unsigned_overflow_
-static inline int avtab_hash(struct avtab_key *keyp, uint32_t mask)
+ignore_unsigned_overflow_ static inline int avtab_hash(struct avtab_key *keyp,
+						       uint32_t mask)
 {
 	static const uint32_t c1 = 0xcc9e2d51;
 	static const uint32_t c2 = 0x1b873593;
 	static const uint32_t r1 = 15;
 	static const uint32_t r2 = 13;
-	static const uint32_t m  = 5;
-	static const uint32_t n  = 0xe6546b64;
+	static const uint32_t m = 5;
+	static const uint32_t n = 0xe6546b64;
 
 	uint32_t hash = 0;
 
-#define mix(input) do { \
-	uint32_t v = input; \
-	v *= c1; \
-	v = (v << r1) | (v >> (32 - r1)); \
-	v *= c2; \
-	hash ^= v; \
-	hash = (hash << r2) | (hash >> (32 - r2)); \
-	hash = hash * m + n; \
-} while (0)
+#define mix(input)                                         \
+	do {                                               \
+		uint32_t v = input;                        \
+		v *= c1;                                   \
+		v = (v << r1) | (v >> (32 - r1));          \
+		v *= c2;                                   \
+		hash ^= v;                                 \
+		hash = (hash << r2) | (hash >> (32 - r2)); \
+		hash = hash * m + n;                       \
+	} while (0)
 
 	mix(keyp->target_class);
 	mix(keyp->target_type);
@@ -90,14 +90,13 @@ static inline int avtab_hash(struct avtab_key *keyp, uint32_t mask)
 	return hash & mask;
 }
 
-static avtab_ptr_t
-avtab_insert_node(avtab_t * h, int hvalue, avtab_ptr_t prev, avtab_key_t * key,
-		  avtab_datum_t * datum)
+static avtab_ptr_t avtab_insert_node(avtab_t *h, int hvalue, avtab_ptr_t prev,
+				     avtab_key_t *key, avtab_datum_t *datum)
 {
 	avtab_ptr_t newnode;
 	avtab_extended_perms_t *xperms;
 
-	newnode = (avtab_ptr_t) malloc(sizeof(struct avtab_node));
+	newnode = (avtab_ptr_t)malloc(sizeof(struct avtab_node));
 	if (newnode == NULL)
 		return NULL;
 	memset(newnode, 0, sizeof(struct avtab_node));
@@ -134,19 +133,19 @@ avtab_insert_node(avtab_t * h, int hvalue, avtab_ptr_t prev, avtab_key_t * key,
 	return newnode;
 }
 
-int avtab_insert(avtab_t * h, avtab_key_t * key, avtab_datum_t * datum)
+int avtab_insert(avtab_t *h, avtab_key_t *key, avtab_datum_t *datum)
 {
 	int hvalue;
 	avtab_ptr_t prev, cur, newnode;
-	uint16_t specified =
-	    key->specified & ~(AVTAB_ENABLED | AVTAB_ENABLED_OLD);
+	uint16_t specified = key->specified &
+			     ~(AVTAB_ENABLED | AVTAB_ENABLED_OLD);
 
 	if (!h || !h->htable)
 		return SEPOL_ENOMEM;
 
 	hvalue = avtab_hash(key, h->mask);
-	for (prev = NULL, cur = h->htable[hvalue];
-	     cur; prev = cur, cur = cur->next) {
+	for (prev = NULL, cur = h->htable[hvalue]; cur;
+	     prev = cur, cur = cur->next) {
 		if (key->source_type == cur->key.source_type &&
 		    key->target_type == cur->key.target_type &&
 		    key->target_class == cur->key.target_class &&
@@ -178,19 +177,19 @@ int avtab_insert(avtab_t * h, avtab_key_t * key, avtab_datum_t * datum)
  * key/specified mask into the table, as needed by the conditional avtab.  
  * It also returns a pointer to the node inserted.
  */
-avtab_ptr_t
-avtab_insert_nonunique(avtab_t * h, avtab_key_t * key, avtab_datum_t * datum)
+avtab_ptr_t avtab_insert_nonunique(avtab_t *h, avtab_key_t *key,
+				   avtab_datum_t *datum)
 {
 	int hvalue;
 	avtab_ptr_t prev, cur, newnode;
-	uint16_t specified =
-	    key->specified & ~(AVTAB_ENABLED | AVTAB_ENABLED_OLD);
+	uint16_t specified = key->specified &
+			     ~(AVTAB_ENABLED | AVTAB_ENABLED_OLD);
 
 	if (!h || !h->htable)
 		return NULL;
 	hvalue = avtab_hash(key, h->mask);
-	for (prev = NULL, cur = h->htable[hvalue];
-	     cur; prev = cur, cur = cur->next) {
+	for (prev = NULL, cur = h->htable[hvalue]; cur;
+	     prev = cur, cur = cur->next) {
 		if (key->source_type == cur->key.source_type &&
 		    key->target_type == cur->key.target_type &&
 		    key->target_class == cur->key.target_class &&
@@ -211,12 +210,12 @@ avtab_insert_nonunique(avtab_t * h, avtab_key_t * key, avtab_datum_t * datum)
 	return newnode;
 }
 
-avtab_datum_t *avtab_search(avtab_t * h, avtab_key_t * key)
+avtab_datum_t *avtab_search(avtab_t *h, avtab_key_t *key)
 {
 	int hvalue;
 	avtab_ptr_t cur;
-	uint16_t specified =
-	    key->specified & ~(AVTAB_ENABLED | AVTAB_ENABLED_OLD);
+	uint16_t specified = key->specified &
+			     ~(AVTAB_ENABLED | AVTAB_ENABLED_OLD);
 
 	if (!h || !h->htable)
 		return NULL;
@@ -246,12 +245,12 @@ avtab_datum_t *avtab_search(avtab_t * h, avtab_key_t * key)
 /* This search function returns a node pointer, and can be used in
  * conjunction with avtab_search_next_node()
  */
-avtab_ptr_t avtab_search_node(avtab_t * h, avtab_key_t * key)
+avtab_ptr_t avtab_search_node(avtab_t *h, avtab_key_t *key)
 {
 	int hvalue;
 	avtab_ptr_t cur;
-	uint16_t specified =
-	    key->specified & ~(AVTAB_ENABLED | AVTAB_ENABLED_OLD);
+	uint16_t specified = key->specified &
+			     ~(AVTAB_ENABLED | AVTAB_ENABLED_OLD);
 
 	if (!h || !h->htable)
 		return NULL;
@@ -305,7 +304,7 @@ avtab_ptr_t avtab_search_node_next(avtab_ptr_t node, int specified)
 	return NULL;
 }
 
-void avtab_destroy(avtab_t * h)
+void avtab_destroy(avtab_t *h)
 {
 	unsigned int i;
 	avtab_ptr_t cur, temp;
@@ -331,9 +330,9 @@ void avtab_destroy(avtab_t * h)
 	h->mask = 0;
 }
 
-int avtab_map(const avtab_t * h,
-	      int (*apply) (avtab_key_t * k,
-			    avtab_datum_t * d, void *args), void *args)
+int avtab_map(const avtab_t *h,
+	      int (*apply)(avtab_key_t *k, avtab_datum_t *d, void *args),
+	      void *args)
 {
 	unsigned int i;
 	int ret;
@@ -354,7 +353,7 @@ int avtab_map(const avtab_t * h,
 	return 0;
 }
 
-int avtab_init(avtab_t * h)
+int avtab_init(avtab_t *h)
 {
 	h->htable = NULL;
 	h->nel = 0;
@@ -372,7 +371,7 @@ int avtab_alloc(avtab_t *h, uint32_t nrules)
 		goto out;
 
 	while (work) {
-		work  = work >> 1;
+		work = work >> 1;
 		shift++;
 	}
 	if (shift > 2)
@@ -392,7 +391,7 @@ out:
 	return 0;
 }
 
-void avtab_hash_eval(avtab_t * h, char *tag)
+void avtab_hash_eval(avtab_t *h, char *tag)
 {
 	unsigned int i, chain_len, slots_used, max_chain_len;
 	avtab_ptr_t cur;
@@ -414,116 +413,27 @@ void avtab_hash_eval(avtab_t * h, char *tag)
 		}
 	}
 
-	printf
-	    ("%s:  %d entries and %d/%d buckets used, longest chain length %d\n",
-	     tag, h->nel, slots_used, h->nslot, max_chain_len);
+	printf("%s:  %d entries and %d/%d buckets used, longest chain length %d\n",
+	       tag, h->nel, slots_used, h->nslot, max_chain_len);
 }
 
-/* Ordering of datums in the original avtab format in the policy file. */
-static const uint16_t spec_order[] = {
-	AVTAB_ALLOWED,
-	AVTAB_AUDITDENY,
-	AVTAB_AUDITALLOW,
-	AVTAB_TRANSITION,
-	AVTAB_CHANGE,
-	AVTAB_MEMBER,
-	AVTAB_XPERMS_ALLOWED,
-	AVTAB_XPERMS_AUDITALLOW,
-	AVTAB_XPERMS_DONTAUDIT
-};
-
-int avtab_read_item(struct policy_file *fp, uint32_t vers, avtab_t * a,
-		    int (*insertf) (avtab_t * a, avtab_key_t * k,
-				    avtab_datum_t * d, void *p), void *p)
+int avtab_read_item(struct policy_file *fp, avtab_t *a,
+		    int (*insertf)(avtab_t *a, avtab_key_t *k, avtab_datum_t *d,
+				   void *p),
+		    void *p)
 {
 	uint8_t buf8;
-	uint16_t buf16[4], enabled;
-	uint32_t buf32[8], items, items2, val;
+	uint16_t buf16[4];
+	uint32_t buf32[8], items;
 	avtab_key_t key;
 	avtab_datum_t datum;
 	avtab_extended_perms_t xperms;
-	unsigned int android_m_compat_optype = 0;
 	unsigned int i;
 	int rc;
 
 	memset(&key, 0, sizeof(avtab_key_t));
 	memset(&datum, 0, sizeof(avtab_datum_t));
 	memset(&xperms, 0, sizeof(avtab_extended_perms_t));
-
-	if (vers < POLICYDB_VERSION_AVTAB) {
-		rc = next_entry(buf32, fp, sizeof(uint32_t));
-		if (rc < 0) {
-			ERR(fp->handle, "truncated entry");
-			return -1;
-		}
-		items2 = le32_to_cpu(buf32[0]);
-
-		if (items2 < 5 || items2 > ARRAY_SIZE(buf32)) {
-			ERR(fp->handle, "invalid item count");
-			return -1;
-		}
-
-		rc = next_entry(buf32, fp, sizeof(uint32_t) * items2);
-		if (rc < 0) {
-			ERR(fp->handle, "truncated entry");
-			return -1;
-		}
-
-		items = 0;
-		val = le32_to_cpu(buf32[items++]);
-		key.source_type = (uint16_t) val;
-		if (key.source_type != val) {
-			ERR(fp->handle, "truncated source type");
-			return -1;
-		}
-		val = le32_to_cpu(buf32[items++]);
-		key.target_type = (uint16_t) val;
-		if (key.target_type != val) {
-			ERR(fp->handle, "truncated target type");
-			return -1;
-		}
-		val = le32_to_cpu(buf32[items++]);
-		key.target_class = (uint16_t) val;
-		if (key.target_class != val) {
-			ERR(fp->handle, "truncated target class");
-			return -1;
-		}
-
-		val = le32_to_cpu(buf32[items++]);
-		enabled = (val & AVTAB_ENABLED_OLD) ? AVTAB_ENABLED : 0;
-
-		if (!(val & (AVTAB_AV | AVTAB_TYPE))) {
-			ERR(fp->handle, "null entry");
-			return -1;
-		}
-		if ((val & AVTAB_AV) && (val & AVTAB_TYPE)) {
-			ERR(fp->handle, "entry has both access "
-			    "vectors and types");
-			return -1;
-		}
-
-		for (i = 0; i < ARRAY_SIZE(spec_order); i++) {
-			if (val & spec_order[i]) {
-				if (items >= items2) { /* items is index, items2 is total number */
-					ERR(fp->handle, "entry has too many items (%d/%d)",
-					    items + 1, items2);
-					return -1;
-				}
-				key.specified = spec_order[i] | enabled;
-				datum.data = le32_to_cpu(buf32[items++]);
-				rc = insertf(a, &key, &datum, p);
-				if (rc)
-					return rc;
-			}
-		}
-
-		if (items != items2) {
-			ERR(fp->handle, "entry only had %d items, "
-			    "expected %d", items2, items);
-			return -1;
-		}
-		return 0;
-	}
 
 	rc = next_entry(buf16, fp, sizeof(uint16_t) * 4);
 	if (rc < 0) {
@@ -536,14 +446,8 @@ int avtab_read_item(struct policy_file *fp, uint32_t vers, avtab_t * a,
 	key.target_class = le16_to_cpu(buf16[items++]);
 	key.specified = le16_to_cpu(buf16[items++]);
 
-	if ((key.specified & AVTAB_OPTYPE) &&
-			(vers == POLICYDB_VERSION_XPERMS_IOCTL)) {
-		key.specified = avtab_optype_to_xperms(key.specified);
-		android_m_compat_optype = 1;
-		avtab_android_m_compat_set();
-	}
-
-	if (key.specified & ~(AVTAB_AV | AVTAB_TYPE | AVTAB_XPERMS | AVTAB_ENABLED)) {
+	if (key.specified &
+	    ~(AVTAB_AV | AVTAB_TYPE | AVTAB_XPERMS | AVTAB_ENABLED)) {
 		ERR(fp->handle, "invalid specifier");
 		return -1;
 	}
@@ -553,38 +457,20 @@ int avtab_read_item(struct policy_file *fp, uint32_t vers, avtab_t * a,
 		return -1;
 	}
 
-	if ((vers < POLICYDB_VERSION_XPERMS_IOCTL) &&
-			(key.specified & AVTAB_XPERMS)) {
-		ERR(fp->handle, "policy version %u does not support extended "
-				"permissions rules and one was specified", vers);
-		return -1;
-	} else if (key.specified & AVTAB_XPERMS) {
+	if (key.specified & AVTAB_XPERMS) {
 		rc = next_entry(&buf8, fp, sizeof(uint8_t));
 		if (rc < 0) {
 			ERR(fp->handle, "truncated entry");
 			return -1;
 		}
 		xperms.specified = buf8;
-		if (avtab_android_m_compat ||
-				((xperms.specified != AVTAB_XPERMS_IOCTLFUNCTION) &&
-				(xperms.specified != AVTAB_XPERMS_IOCTLDRIVER) &&
-				(xperms.specified != AVTAB_XPERMS_NLMSG) &&
-				(vers == POLICYDB_VERSION_XPERMS_IOCTL))) {
-			xperms.driver = xperms.specified;
-			if (android_m_compat_optype)
-				xperms.specified = AVTAB_XPERMS_IOCTLDRIVER;
-			else
-				xperms.specified = AVTAB_XPERMS_IOCTLFUNCTION;
-			avtab_android_m_compat_set();
-		} else {
-			rc = next_entry(&buf8, fp, sizeof(uint8_t));
-			if (rc < 0) {
-				ERR(fp->handle, "truncated entry");
-				return -1;
-			}
-			xperms.driver = buf8;
+		rc = next_entry(&buf8, fp, sizeof(uint8_t));
+		if (rc < 0) {
+			ERR(fp->handle, "truncated entry");
+			return -1;
 		}
-		rc = next_entry(buf32, fp, sizeof(uint32_t)*8);
+		xperms.driver = buf8;
+		rc = next_entry(buf32, fp, sizeof(uint32_t) * 8);
 		if (rc < 0) {
 			ERR(fp->handle, "truncated entry");
 			return -1;
@@ -603,13 +489,13 @@ int avtab_read_item(struct policy_file *fp, uint32_t vers, avtab_t * a,
 	return insertf(a, &key, &datum, p);
 }
 
-static int avtab_insertf(avtab_t * a, avtab_key_t * k, avtab_datum_t * d,
-			 void *p __attribute__ ((unused)))
+static int avtab_insertf(avtab_t *a, avtab_key_t *k, avtab_datum_t *d,
+			 void *p __attribute__((unused)))
 {
 	return avtab_insert(a, k, d);
 }
 
-int avtab_read(avtab_t * a, struct policy_file *fp, uint32_t vers)
+int avtab_read(avtab_t *a, struct policy_file *fp)
 {
 	unsigned int i;
 	int rc;
@@ -622,7 +508,8 @@ int avtab_read(avtab_t * a, struct policy_file *fp, uint32_t vers)
 		goto bad;
 	}
 	nel = le32_to_cpu(buf[0]);
-	if (zero_or_saturated(nel) || exceeds_available_bytes(fp, nel, sizeof(uint32_t) * 3)) {
+	if (zero_or_saturated(nel) ||
+	    exceeds_available_bytes(fp, nel, sizeof(uint32_t) * 3)) {
 		ERR(fp->handle, "table is empty");
 		goto bad;
 	}
@@ -634,7 +521,7 @@ int avtab_read(avtab_t * a, struct policy_file *fp, uint32_t vers)
 	}
 
 	for (i = 0; i < nel; i++) {
-		rc = avtab_read_item(fp, vers, a, avtab_insertf, NULL);
+		rc = avtab_read_item(fp, a, avtab_insertf, NULL);
 		if (rc) {
 			if (rc == SEPOL_ENOMEM)
 				ERR(fp->handle, "out of memory");
@@ -647,7 +534,7 @@ int avtab_read(avtab_t * a, struct policy_file *fp, uint32_t vers)
 
 	return 0;
 
-      bad:
+bad:
 	avtab_destroy(a);
 	return -1;
 }

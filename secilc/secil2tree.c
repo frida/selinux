@@ -71,7 +71,7 @@ int main(int argc, char *argv[])
 	FILE *file = NULL;
 	char *buffer = NULL;
 	struct stat filedata;
-	uint32_t file_size;
+	size_t file_size;
 	char *output = NULL;
 	struct cil_db *db = NULL;
 	int preserve_tunables = 0;
@@ -81,55 +81,57 @@ int main(int argc, char *argv[])
 	int opt_index = 0;
 	enum cil_log_level log_level = CIL_ERR;
 	static struct option long_opts[] = {
-		{"help", no_argument, 0, 'h'},
-		{"verbose", no_argument, 0, 'v'},
-		{"preserve-tunables", no_argument, 0, 'P'},
-		{"qualified-names", no_argument, 0, 'Q'},
-		{"output", required_argument, 0, 'o'},
-		{"ast-phase", required_argument, 0, 'A'},
-		{0, 0, 0, 0}
+		{ "help", no_argument, NULL, 'h' },
+		{ "verbose", no_argument, NULL, 'v' },
+		{ "preserve-tunables", no_argument, NULL, 'P' },
+		{ "qualified-names", no_argument, NULL, 'Q' },
+		{ "output", required_argument, NULL, 'o' },
+		{ "ast-phase", required_argument, NULL, 'A' },
+		{ NULL, 0, NULL, 0 }
 	};
 	int i;
 
 	while (1) {
-		opt_char = getopt_long(argc, argv, "o:hvPQA:", long_opts, &opt_index);
+		opt_char = getopt_long(argc, argv, "o:hvPQA:", long_opts,
+				       &opt_index);
 		if (opt_char == -1) {
 			break;
 		}
 		switch (opt_char) {
-			case 'v':
-				log_level++;
-				break;
-			case 'P':
-				preserve_tunables = 1;
-				break;
-			case 'Q':
-				qualified_names = 1;
-				break;
-			case 'o':
-				output = strdup(optarg);
-				break;
-			case 'A':
-				if (!strcasecmp(optarg, "parse")) {
-					write_ast = WRITE_AST_PHASE_PARSE;
-				} else if (!strcasecmp(optarg, "build")) {
-					write_ast = WRITE_AST_PHASE_BUILD;
-				} else if (!strcasecmp(optarg, "resolve")) {
-					write_ast = WRITE_AST_PHASE_RESOLVE;
-				} else if (!strcasecmp(optarg, "post")) {
-					write_ast = WRITE_AST_PHASE_POST;
-				} else {
-					fprintf(stderr, "Invalid AST phase: %s\n", optarg);
-					usage(argv[0]);
-				}
-				break;
-			case 'h':
+		case 'v':
+			log_level++;
+			break;
+		case 'P':
+			preserve_tunables = 1;
+			break;
+		case 'Q':
+			qualified_names = 1;
+			break;
+		case 'o':
+			output = strdup(optarg);
+			break;
+		case 'A':
+			if (!strcasecmp(optarg, "parse")) {
+				write_ast = WRITE_AST_PHASE_PARSE;
+			} else if (!strcasecmp(optarg, "build")) {
+				write_ast = WRITE_AST_PHASE_BUILD;
+			} else if (!strcasecmp(optarg, "resolve")) {
+				write_ast = WRITE_AST_PHASE_RESOLVE;
+			} else if (!strcasecmp(optarg, "post")) {
+				write_ast = WRITE_AST_PHASE_POST;
+			} else {
+				fprintf(stderr, "Invalid AST phase: %s\n",
+					optarg);
 				usage(argv[0]);
-			case '?':
-				break;
-			default:
-				fprintf(stderr, "Unsupported option: %s\n", optarg);
-				usage(argv[0]);
+			}
+			break;
+		case 'h':
+			usage(argv[0]);
+		case '?':
+			break;
+		default:
+			fprintf(stderr, "Unsupported option: %s\n", optarg);
+			usage(argv[0]);
 		}
 	}
 
@@ -153,7 +155,7 @@ int main(int argc, char *argv[])
 			rc = SEPOL_ERR;
 			goto exit;
 		}
-		rc = stat(argv[i], &filedata);
+		rc = fstat(fileno(file), &filedata);
 		if (rc == -1) {
 			fprintf(stderr, "Could not stat file: %s\n", argv[i]);
 			goto exit;
@@ -190,7 +192,8 @@ int main(int argc, char *argv[])
 	} else {
 		file = fopen(output, "w");
 		if (file == NULL) {
-			fprintf(stderr, "Failure opening file %s for writing\n", output);
+			fprintf(stderr, "Failure opening file %s for writing\n",
+				output);
 			rc = SEPOL_ERR;
 			goto exit;
 		}
@@ -217,7 +220,7 @@ int main(int argc, char *argv[])
 	}
 
 exit:
-	if (file != NULL && file != stdin) {
+	if (file != NULL && file != stdout) {
 		fclose(file);
 	}
 	free(buffer);

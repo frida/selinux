@@ -6,6 +6,10 @@ all:
 	$(MAKE) -C src 
 	$(MAKE) -C utils
 
+.PHONY: fuzz
+fuzz: all
+	$(MAKE) -C fuzz
+
 install: 
 	$(MAKE) -C include install
 	$(MAKE) -C src install
@@ -19,6 +23,7 @@ clean:
 	$(MAKE) -C src clean
 	$(MAKE) -C utils clean
 	$(MAKE) -C tests clean
+	$(MAKE) -C fuzz clean
 
 test:
 	$(MAKE) -C tests test

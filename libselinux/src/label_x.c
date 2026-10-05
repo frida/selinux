@@ -21,10 +21,10 @@
 
 /* A context specification. */
 typedef struct spec {
-	struct selabel_lookup_rec lr;	/* holds contexts for lookup result */
-	char *key;		/* key string */
-	int type;		/* type of record (prop, ext, client) */
-	int matches;		/* number of matches made during operation */
+	struct selabel_lookup_rec lr; /* holds contexts for lookup result */
+	char *key; /* key string */
+	int type; /* type of record (prop, ext, client) */
+	int matches; /* number of matches made during operation */
 } spec_t;
 
 struct saved_data {
@@ -78,6 +78,9 @@ static int process_line(const char *path, const char *line_buf, int pass,
 			selinux_log(SELINUX_WARNING,
 				    "%s:  line %u has invalid object type %s\n",
 				    path, lineno, type);
+			free(type);
+			free(key);
+			free(context);
 			return 0;
 		}
 		data->spec_arr[data->nspec].key = key;
@@ -109,7 +112,7 @@ static int init(struct selabel_handle *rec, const struct selinux_opt *opts,
 	/* Process arguments */
 	while (n) {
 		n--;
-		switch(opts[n].type) {
+		switch (opts[n].type) {
 		case SELABEL_OPT_PATH:
 			path = opts[n].value;
 			break;
@@ -126,7 +129,7 @@ static int init(struct selabel_handle *rec, const struct selinux_opt *opts,
 	/* Open the specification file. */
 	if (!path)
 		path = selinux_x_context_path();
-	if ((fp = fopen(path, "re")) == NULL)
+	if ((fp = selinux_policy_fopen(path, "re")) == NULL)
 		return -1;
 	__fsetlocking(fp, FSETLOCKING_BYCALLER);
 
@@ -136,7 +139,13 @@ static int init(struct selabel_handle *rec, const struct selinux_opt *opts,
 		errno = EINVAL;
 		goto finish;
 	}
-	rec->spec_file = strdup(path);
+	rec->spec_files = calloc(1, sizeof(*rec->spec_files));
+	if (!rec->spec_files)
+		goto finish;
+	rec->spec_files[0] = strdup(path);
+	if (!rec->spec_files[0])
+		goto finish;
+	rec->spec_files_len = 1;
 
 	/* 
 	 * Perform two passes over the specification file.
@@ -152,8 +161,10 @@ static int init(struct selabel_handle *rec, const struct selinux_opt *opts,
 		data->nspec = 0;
 		while (getline(&line_buf, &line_len, fp) > 0 &&
 		       data->nspec < maxnspec) {
-			if (process_line(path, line_buf, pass, ++lineno, rec))
+			if (process_line(path, line_buf, pass, ++lineno, rec)) {
+				status = -1;
 				goto finish;
+			}
 		}
 
 		if (pass == 0) {
@@ -162,8 +173,10 @@ static int init(struct selabel_handle *rec, const struct selinux_opt *opts,
 				goto finish;
 			}
 			data->spec_arr = calloc(data->nspec, sizeof(spec_t));
-			if (data->spec_arr == NULL)
+			if (data->spec_arr == NULL) {
+				status = -1;
 				goto finish;
+			}
 			maxnspec = data->nspec;
 
 			status = fseek(fp, 0L, SEEK_SET);
@@ -207,7 +220,7 @@ static void close(struct selabel_handle *rec)
 	}
 
 	if (spec_arr)
-	    free(spec_arr);
+		free(spec_arr);
 
 	free(data);
 	rec->data = NULL;
@@ -245,8 +258,8 @@ static void stats(struct selabel_handle *rec)
 	for (i = 0; i < data->nspec; i++)
 		total += data->spec_arr[i].matches;
 
-	selinux_log(SELINUX_INFO, "%u entries, %u matches made\n",
-		  data->nspec, total);
+	selinux_log(SELINUX_INFO, "%u entries, %u matches made\n", data->nspec,
+		    total);
 }
 
 int selabel_x_init(struct selabel_handle *rec, const struct selinux_opt *opts,

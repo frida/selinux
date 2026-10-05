@@ -55,22 +55,23 @@
 #error NAMESPACE_PRIV needs the USE_PAM option
 #endif
 
+#include <stdbool.h>
 #include <stdio.h>
-#include <stdlib.h>		/* for malloc(), realloc(), free() */
-#include <pwd.h>		/* for getpwuid() */
+#include <stdlib.h> /* for malloc(), realloc(), free() */
+#include <pwd.h> /* for getpwuid() */
 #include <ctype.h>
-#include <sys/types.h>		/* to make getuid() and getpwuid() happy */
-#include <sys/wait.h>		/* for wait() */
-#include <getopt.h>		/* for getopt_long() form of getopt() */
+#include <sys/types.h> /* to make getuid() and getpwuid() happy */
+#include <sys/wait.h> /* for wait() */
+#include <getopt.h> /* for getopt_long() form of getopt() */
 #include <fcntl.h>
 #include <string.h>
 #include <errno.h>
-#include <selinux/selinux.h>	/* for is_selinux_enabled() */
-#include <selinux/context.h>	/* for context-mangling functions */
+#include <selinux/selinux.h> /* for is_selinux_enabled() */
+#include <selinux/context.h> /* for context-mangling functions */
 #include <selinux/get_default_type.h>
-#include <selinux/get_context_list.h>	/* for SELINUX_DEFAULTUSER */
+#include <selinux/get_context_list.h> /* for SELINUX_DEFAULTUSER */
 #include <signal.h>
-#include <unistd.h>		/* for getuid(), exit(), getopt() */
+#include <unistd.h> /* for getuid(), exit(), getopt() */
 #ifdef USE_AUDIT
 #include <libaudit.h>
 #endif
@@ -79,24 +80,29 @@
 #include <cap-ng.h>
 #endif
 #ifdef USE_NLS
-#include <locale.h>		/* for setlocale() */
-#include <libintl.h>		/* for gettext() */
-#define _(msgid) gettext (msgid)
+#include <locale.h> /* for setlocale() */
+#include <libintl.h> /* for gettext() */
+#define _(msgid) gettext(msgid)
 #else
 #define _(msgid) (msgid)
 #endif
 #ifndef PACKAGE
-#define PACKAGE "policycoreutils"	/* the name of this package lang translation */
+#define PACKAGE \
+	"policycoreutils" /* the name of this package lang translation */
 #endif
 
 #define TRUE 1
 #define FALSE 0
 
 /* USAGE_STRING describes the command-line args of this program. */
-#define USAGE_STRING "USAGE: newrole [ -r role ] [ -t type ] [ -l level ] [ -p ] [ -V ] [ -- args ]"
+#define USAGE_STRING \
+	"USAGE: newrole [ -r role ] [ -t type ] [ -l level ] [ -p ] [ -V ] [ -- args ]"
 
 #ifdef USE_PAM
 #define PAM_SERVICE_CONFIG "/etc/selinux/newrole_pam.conf"
+#ifndef PAM_SERVICE_CONFIG_FALLBACKS
+#define PAM_SERVICE_CONFIG_FALLBACKS "/usr/lib/selinux/newrole_pam.conf"
+#endif
 #endif
 
 #define DEFAULT_PATH "/usr/bin:/bin"
@@ -162,8 +168,8 @@ static char *build_new_range(const char *newlevel, const char *range)
  * All PAM code goes in this section.
  *
  ************************************************************************/
-#include <security/pam_appl.h>	/* for PAM functions */
-#include <security/pam_misc.h>	/* for misc_conv PAM utility function */
+#include <security/pam_appl.h> /* for PAM functions */
+#include <security/pam_misc.h> /* for misc_conv PAM utility function */
 
 static const char *service_name = "newrole";
 
@@ -181,11 +187,10 @@ static const char *service_name = "newrole";
  * program.  This is the only function in this program that makes PAM
  * calls.
  */
-static int authenticate_via_pam(const char *ttyn, pam_handle_t * pam_handle)
+static int authenticate_via_pam(const char *ttyn, pam_handle_t *pam_handle)
 {
-
-	int result = 0;		/* set to 0 (not authenticated) by default */
-	int pam_rc;		/* pam return code */
+	int result = 0; /* set to 0 (not authenticated) by default */
+	int pam_rc; /* pam return code */
 	const char *tty_name;
 
 	if (ttyn) {
@@ -210,17 +215,17 @@ static int authenticate_via_pam(const char *ttyn, pam_handle_t * pam_handle)
 	/* Ask PAM to verify acct_mgmt */
 	pam_rc = pam_acct_mgmt(pam_handle, 0);
 	if (pam_rc == PAM_SUCCESS) {
-		result = 1;	/* user authenticated OK! */
+		result = 1; /* user authenticated OK! */
 	}
 
-      out:
+out:
 	return result;
-}				/* authenticate_via_pam() */
+} /* authenticate_via_pam() */
 
 #include "hashtab.h"
 
 static int free_hashtab_entry(hashtab_key_t key, hashtab_datum_t d,
-			      void *args __attribute__ ((unused)))
+			      void *args __attribute__((unused)))
 {
 	free(key);
 	free(d);
@@ -238,9 +243,8 @@ static unsigned int reqsymhash(hashtab_t h, const_hashtab_key_t key)
 	return hash & (h->size - 1);
 }
 
-static int reqsymcmp(hashtab_t h
-		     __attribute__ ((unused)), const_hashtab_key_t key1,
-		     const_hashtab_key_t key2)
+static int reqsymcmp(hashtab_t h __attribute__((unused)),
+		     const_hashtab_key_t key1, const_hashtab_key_t key2)
 {
 	return strcmp(key1, key2);
 }
@@ -248,9 +252,8 @@ static int reqsymcmp(hashtab_t h
 static hashtab_t app_service_names = NULL;
 #define PAM_SERVICE_SLOTS 64
 
-static int process_pam_config(FILE * cfg)
+static int process_pam_config(const char *config_file_path, FILE *cfg)
 {
-	const char *config_file_path = PAM_SERVICE_CONFIG;
 	char *line_buf = NULL;
 	unsigned long lineno = 0;
 	size_t len = 0;
@@ -276,15 +279,19 @@ static int process_pam_config(FILE * cfg)
 		ret = hashtab_insert(app_service_names, app, service);
 		if (ret == HASHTAB_OVERFLOW) {
 			fprintf(stderr,
-				_
-				("newrole: service name configuration hashtable overflow\n"));
+				_("newrole: service name configuration hashtable overflow\n"));
 			goto err;
+		}
+		if (ret != HASHTAB_SUCCESS) {
+			/* duplicate entry: hashtab kept the first, free this one */
+			free(app);
+			free(service);
 		}
 	}
 
 	free(line_buf);
 	return 0;
-      err:
+err:
 	free(app);
 	free(service);
 	fprintf(stderr, _("newrole:  %s:  error on line %lu.\n"),
@@ -300,42 +307,65 @@ static int process_pam_config(FILE * cfg)
  */
 static int read_pam_config(void)
 {
-	const char *config_file_path = PAM_SERVICE_CONFIG;
+	static const char *paths[] = { PAM_SERVICE_CONFIG,
+				       PAM_SERVICE_CONFIG_FALLBACKS, NULL };
 	FILE *cfg = NULL;
-	cfg = fopen(config_file_path, "r");
+	unsigned int i;
+
+	for (i = 0; paths[i]; i++) {
+		cfg = fopen(paths[i], "re");
+		if (cfg)
+			break;
+	}
 	if (!cfg)
-		return 0;	/* This configuration is optional. */
+		return 0; /* This configuration is optional. */
 	app_service_names =
-	    hashtab_create(reqsymhash, reqsymcmp, PAM_SERVICE_SLOTS);
+		hashtab_create(reqsymhash, reqsymcmp, PAM_SERVICE_SLOTS);
 	if (!app_service_names)
 		goto err;
-	if (process_pam_config(cfg))
+	if (process_pam_config(paths[i], cfg))
 		goto err;
 	fclose(cfg);
 	return 0;
-      err:
+err:
 	fclose(cfg);
 	return -1;
 }
 
-#else				/* else !USE_PAM */
+#else /* else !USE_PAM */
 
 /************************************************************************
  *
  * All shadow passwd code goes in this section.
  *
  ************************************************************************/
-#include <shadow.h>		/* for shadow passwd functions */
-#include <string.h>		/* for strlen(), memset() */
+#include <shadow.h> /* for shadow passwd functions */
+#include <string.h> /* for strlen(), memset() */
 
-#define PASSWORD_PROMPT _("Password:")	/* prompt for getpass() */
+#define PASSWORD_PROMPT _("Password:") /* prompt for getpass() */
 
 static void memzero(void *ptr, size_t size)
 {
-	volatile unsigned char * volatile p = ptr;
+	volatile unsigned char *volatile p = ptr;
 	while (size--) {
 		*p++ = '\0';
 	}
+}
+
+/* Compare two crypt() strings without an early exit on the first mismatching
+ * byte, so the number of matching leading bytes is not leaked via timing. */
+static int hash_equal(const char *computed, const char *stored)
+{
+	size_t clen = strlen(computed);
+	size_t slen = strlen(stored);
+	volatile unsigned char diff = (clen != slen);
+	size_t i;
+
+	for (i = 0; i < slen; i++)
+		diff |= (unsigned char)computed[clen ? i % clen : 0] ^
+			(unsigned char)stored[i];
+
+	return diff == 0;
 }
 
 /* authenticate_via_shadow_passwd()
@@ -375,27 +405,27 @@ static int authenticate_via_shadow_passwd(const char *uname)
 
 	/* Use crypt() to encrypt user's input password. */
 	errno = 0;
-	encrypted_password_s = crypt(unencrypted_password_s,
-				     p_shadow_line->sp_pwdp);
+	encrypted_password_s =
+		crypt(unencrypted_password_s, p_shadow_line->sp_pwdp);
 	memzero(unencrypted_password_s, strlen(unencrypted_password_s));
 	if (errno || !encrypted_password_s) {
 		fprintf(stderr, _("Cannot encrypt password.\n"));
 		return 0;
 	}
 
-	ret = !strcmp(encrypted_password_s, p_shadow_line->sp_pwdp);
+	ret = hash_equal(encrypted_password_s, p_shadow_line->sp_pwdp);
 	memzero(encrypted_password_s, strlen(encrypted_password_s));
 	return ret;
 }
-#endif				/* if/else USE_PAM */
+#endif /* if/else USE_PAM */
 
 /**
  * This function checks to see if the shell is known in /etc/shells.
- * If so, it returns 1. On error or illegal shell, it returns 0.
+ * If so, it returns true. On error or illegal shell, it returns false.
  */
-static int verify_shell(const char *shell_name)
+static bool verify_shell(const char *shell_name)
 {
-	int found = 0;
+	bool found = false;
 	const char *buf;
 
 	if (!(shell_name && shell_name[0]))
@@ -408,7 +438,7 @@ static int verify_shell(const char *shell_name)
 
 		/* check the shell skipping newline char */
 		if (!strcmp(shell_name, buf)) {
-			found = 1;
+			found = true;
 			break;
 		}
 	}
@@ -431,7 +461,7 @@ static int extract_pw_data(struct passwd *pw_copy)
 
 #ifdef USE_AUDIT
 	uid = audit_getloginuid();
-	if (uid == (uid_t) - 1)
+	if (uid == (uid_t)-1)
 		uid = getuid();
 #else
 	uid = getuid();
@@ -440,8 +470,8 @@ static int extract_pw_data(struct passwd *pw_copy)
 	setpwent();
 	pw = getpwuid(uid);
 	endpwent();
-	if (!(pw && pw->pw_name && pw->pw_name[0] && pw->pw_shell
-	      && pw->pw_shell[0] && pw->pw_dir && pw->pw_dir[0])) {
+	if (!(pw && pw->pw_name && pw->pw_name[0] && pw->pw_shell &&
+	      pw->pw_shell[0] && pw->pw_dir && pw->pw_dir[0])) {
 		fprintf(stderr,
 			_("cannot find valid entry in the passwd file.\n"));
 		return -1;
@@ -458,13 +488,13 @@ static int extract_pw_data(struct passwd *pw_copy)
 		goto out_free;
 	}
 
-	if (verify_shell(pw->pw_shell) == 0) {
+	if (!verify_shell(pw->pw_shell)) {
 		fprintf(stderr, _("Error!  Shell is not valid.\n"));
 		goto out_free;
 	}
 	return 0;
 
-      out_free:
+out_free:
 	free(pw->pw_name);
 	free(pw->pw_dir);
 	free(pw->pw_shell);
@@ -484,15 +514,15 @@ static int extract_pw_data(struct passwd *pw_copy)
  *
  * Returns zero on success, non-zero otherwise
  */
-static int restore_environment(int preserve_environment,
-			       char **old_environ, const struct passwd *pw)
+static int restore_environment(int preserve_environment, char **old_environ,
+			       const struct passwd *pw)
 {
 	char const *term_env;
 	char const *display_env;
 	char const *xauthority_env;
-	char *term = NULL;	/* temporary container */
-	char *display = NULL;	/* temporary container */
-	char *xauthority = NULL;	/* temporary container */
+	char *term = NULL; /* temporary container */
+	char *display = NULL; /* temporary container */
+	char *xauthority = NULL; /* temporary container */
 	int rc;
 
 	environ = old_environ;
@@ -535,7 +565,7 @@ static int restore_environment(int preserve_environment,
 	rc |= setenv("USER", pw->pw_name, 1);
 	rc |= setenv("LOGNAME", pw->pw_name, 1);
 	rc |= setenv("PATH", DEFAULT_PATH, 1);
-      out:
+out:
 	free(term);
 	free(display);
 	free(xauthority);
@@ -554,7 +584,8 @@ static int restore_environment(int preserve_environment,
 static int drop_capabilities(int full)
 {
 	uid_t uid = getuid();
-	if (!uid) return 0;
+	if (!uid)
+		return 0;
 
 	capng_setpid(getpid());
 	capng_clear(CAPNG_SELECT_CAPS);
@@ -575,8 +606,9 @@ static int drop_capabilities(int full)
 		return -1;
 	}
 
-	if (! full) 
-		capng_update(CAPNG_ADD, CAPNG_EFFECTIVE | CAPNG_PERMITTED, CAP_AUDIT_WRITE);
+	if (!full)
+		capng_update(CAPNG_ADD, CAPNG_EFFECTIVE | CAPNG_PERMITTED,
+			     CAP_AUDIT_WRITE);
 	return capng_apply(CAPNG_SELECT_CAPS);
 }
 #elif defined(NAMESPACE_PRIV)
@@ -596,7 +628,8 @@ static int drop_capabilities(int full)
 static int drop_capabilities(int full)
 {
 	uid_t uid = getuid();
-	if (!uid) return 0;
+	if (!uid)
+		return 0;
 
 	capng_setpid(getpid());
 	capng_clear(CAPNG_SELECT_CAPS);
@@ -617,14 +650,16 @@ static int drop_capabilities(int full)
 		return -1;
 	}
 
-	if (! full) 
-		capng_updatev(CAPNG_ADD, CAPNG_EFFECTIVE | CAPNG_PERMITTED, CAP_SYS_ADMIN , CAP_FOWNER , CAP_CHOWN, CAP_DAC_OVERRIDE, CAP_AUDIT_WRITE, -1);
-	
+	if (!full)
+		capng_updatev(CAPNG_ADD, CAPNG_EFFECTIVE | CAPNG_PERMITTED,
+			      CAP_SYS_ADMIN, CAP_FOWNER, CAP_CHOWN,
+			      CAP_DAC_OVERRIDE, CAP_AUDIT_WRITE, -1);
+
 	return capng_apply(CAPNG_SELECT_CAPS);
 }
 
 #else
-static inline int drop_capabilities(__attribute__ ((__unused__)) int full)
+static inline int drop_capabilities(__attribute__((__unused__)) int full)
 {
 	return 0;
 }
@@ -654,9 +689,8 @@ static int transition_to_caller_uid(void)
 
 #ifdef AUDIT_LOG_PRIV
 /* Send audit message */
-static
-int send_audit_message(int success, const char *old_context,
-		       const char *new_context, const char *ttyn)
+static int send_audit_message(int success, const char *old_context,
+			      const char *new_context, const char *ttyn)
 {
 	char *msg = NULL;
 	int rc;
@@ -673,27 +707,26 @@ int send_audit_message(int success, const char *old_context,
 		rc = -1;
 		goto out;
 	}
-	rc = audit_log_user_message(audit_fd, AUDIT_USER_ROLE_CHANGE,
-				    msg, NULL, NULL, ttyn, success);
+	rc = audit_log_user_message(audit_fd, AUDIT_USER_ROLE_CHANGE, msg, NULL,
+				    NULL, ttyn, success);
 	if (rc <= 0) {
 		fprintf(stderr, _("Error sending audit message.\n"));
 		rc = -1;
 		goto out;
 	}
 	rc = 0;
-      out:
+out:
 	free(msg);
 	close(audit_fd);
 	return rc;
 }
 #else
-static inline
-    int send_audit_message(int success __attribute__ ((unused)),
-			   const char *old_context
-			   __attribute__ ((unused)),
-			   const char *new_context
-			   __attribute__ ((unused)), const char *ttyn
-			   __attribute__ ((unused)))
+static inline int send_audit_message(int success __attribute__((unused)),
+				     const char *old_context
+				     __attribute__((unused)),
+				     const char *new_context
+				     __attribute__((unused)),
+				     const char *ttyn __attribute__((unused)))
 {
 	return 0;
 }
@@ -708,21 +741,15 @@ static inline
  * in permissive mode.
  */
 static int relabel_tty(const char *ttyn, const char *new_context,
-		       char **tty_context,
-		       char **new_tty_context)
+		       char **tty_context, char **new_tty_context,
+		       int enforcing)
 {
 	int fd, rc;
-	int enforcing = security_getenforce();
 	char *tty_con = NULL;
 	char *new_tty_con = NULL;
 
 	if (!ttyn)
 		return 0;
-
-	if (enforcing < 0) {
-		fprintf(stderr, _("Could not determine enforcing mode.\n"));
-		return -1;
-	}
 
 	/* Re-open TTY descriptor */
 	fd = open(ttyn, O_RDWR | O_NONBLOCK);
@@ -733,14 +760,16 @@ static int relabel_tty(const char *ttyn, const char *new_context,
 	/* this craziness is to make sure we can't block on open and deadlock */
 	rc = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) & ~O_NONBLOCK);
 	if (rc) {
-		fprintf(stderr, _("Error!  Could not clear O_NONBLOCK on %s\n"), ttyn);
+		fprintf(stderr, _("Error!  Could not clear O_NONBLOCK on %s\n"),
+			ttyn);
 		close(fd);
 		return rc;
 	}
 
 	if (fgetfilecon(fd, &tty_con) < 0) {
-		fprintf(stderr, _("%s!  Could not get current context "
-				  "for %s, not relabeling tty.\n"),
+		fprintf(stderr,
+			_("%s!  Could not get current context "
+			  "for %s, not relabeling tty.\n"),
 			enforcing ? "Error" : "Warning", ttyn);
 		if (enforcing)
 			goto close_fd;
@@ -748,9 +777,11 @@ static int relabel_tty(const char *ttyn, const char *new_context,
 
 	if (tty_con &&
 	    (security_compute_relabel(new_context, tty_con,
-				      string_to_security_class("chr_file"), &new_tty_con) < 0)) {
-		fprintf(stderr, _("%s!  Could not get new context for %s, "
-				  "not relabeling tty.\n"),
+				      string_to_security_class("chr_file"),
+				      &new_tty_con) < 0)) {
+		fprintf(stderr,
+			_("%s!  Could not get new context for %s, "
+			  "not relabeling tty.\n"),
 			enforcing ? "Error" : "Warning", ttyn);
 		if (enforcing)
 			goto close_fd;
@@ -771,7 +802,7 @@ static int relabel_tty(const char *ttyn, const char *new_context,
 	*new_tty_context = new_tty_con;
 	return fd;
 
-      close_fd:
+close_fd:
 	freecon(tty_con);
 	close(fd);
 	return -1;
@@ -786,8 +817,7 @@ static int relabel_tty(const char *ttyn, const char *new_context,
  *
  * Returns zero on success, non-zero otherwise
  */
-static int restore_tty_label(int fd, const char *ttyn,
-			     const char *tty_context,
+static int restore_tty_label(int fd, const char *ttyn, const char *tty_context,
 			     const char *new_tty_context)
 {
 	int rc = 0;
@@ -813,7 +843,7 @@ static int restore_tty_label(int fd, const char *ttyn,
 	if ((rc = fsetfilecon(fd, tty_context)) < 0)
 		fprintf(stderr,
 			_("Warning! Could not restore context for %s\n"), ttyn);
-      skip_relabel:
+skip_relabel:
 	freecon(chk_tty_context);
 	return rc;
 }
@@ -830,25 +860,26 @@ static int restore_tty_label(int fd, const char *ttyn,
 static int parse_command_line_arguments(int argc, char **argv, char *ttyn,
 					const char *old_context,
 					char **new_context,
-					int *preserve_environment)
+					int *preserve_environment,
+					int enforcing)
 {
-	int flag_index;		/* flag index in argv[] */
-	int clflag;		/* holds codes for command line flags */
-	char *role_s = NULL;	/* role spec'd by user in argv[] */
-	char *type_s = NULL;	/* type spec'd by user in argv[] */
-	char *type_ptr = NULL;	/* stores malloc'd data from get_default_type */
-	char *level_s = NULL;	/* level spec'd by user in argv[] */
+	int flag_index; /* flag index in argv[] */
+	int clflag; /* holds codes for command line flags */
+	char *role_s = NULL; /* role spec'd by user in argv[] */
+	char *type_s = NULL; /* type spec'd by user in argv[] */
+	char *type_ptr = NULL; /* stores malloc'd data from get_default_type */
+	char *level_s = NULL; /* level spec'd by user in argv[] */
 	char *range_ptr = NULL;
 	const char *new_con = NULL;
 	char *tty_con = NULL;
-	context_t context = NULL;	/* manipulatable form of new_context */
+	context_t context = NULL; /* manipulatable form of new_context */
 	const struct option long_options[] = {
-		{"role", 1, 0, 'r'},
-		{"type", 1, 0, 't'},
-		{"level", 1, 0, 'l'},
-		{"preserve-environment", 0, 0, 'p'},
-		{"version", 0, 0, 'V'},
-		{NULL, 0, 0, 0}
+		{ "role", 1, NULL, 'r' },
+		{ "type", 1, NULL, 't' },
+		{ "level", 1, NULL, 'l' },
+		{ "preserve-environment", 0, NULL, 'p' },
+		{ "version", 0, NULL, 'V' },
+		{ NULL, 0, NULL, 0 }
 	};
 
 	*preserve_environment = 0;
@@ -894,15 +925,18 @@ static int parse_command_line_arguments(int argc, char **argv, char *ttyn,
 			}
 			if (ttyn) {
 				if (fgetfilecon(STDIN_FILENO, &tty_con) >= 0) {
-					if (selinux_check_securetty_context
-					    (tty_con) < 0) {
+					if (selinux_check_securetty_context(
+						    tty_con) < 0) {
 						fprintf(stderr,
-							_
-							("Error: you are not allowed to change levels on a non secure terminal \n"));
+							_("Error: you are not allowed to change levels on a non secure terminal \n"));
 						freecon(tty_con);
 						return -1;
 					}
 					freecon(tty_con);
+				} else if (enforcing) {
+					fprintf(stderr,
+						_("Error: could not determine the security context of the terminal, not allowed to change levels\n"));
+					return -1;
 				}
 			}
 
@@ -955,7 +989,7 @@ static int parse_command_line_arguments(int argc, char **argv, char *ttyn,
 
 	if (level_s) {
 		range_ptr =
-		    build_new_range(level_s, context_range_get(context));
+			build_new_range(level_s, context_range_get(context));
 		if (!range_ptr) {
 			fprintf(stderr,
 				_("failed to build new range with level %s\n"),
@@ -992,7 +1026,7 @@ static int parse_command_line_arguments(int argc, char **argv, char *ttyn,
 	context_free(context);
 	return 0;
 
-      err_free:
+err_free:
 	free(type_ptr);
 	free(range_ptr);
 	/* Don't free new_con, context_free(context) handles this */
@@ -1024,6 +1058,28 @@ static int set_signal_handles(void)
 	return 0;
 }
 
+/**
+ * Ensure the standard file descriptors (stdin, stdout, stderr) are open.
+ * If the caller closed any of them, attach /dev/null so that a descriptor
+ * newrole opens later cannot be silently assigned fd 0, 1 or 2 and then be
+ * clobbered (or have its content disclosed) by stdio operations.
+ *
+ * Returns zero on success, non-zero otherwise.
+ */
+static int sanitize_std_fds(void)
+{
+	int fd;
+
+	for (fd = STDIN_FILENO; fd <= STDERR_FILENO; fd++) {
+		if (fcntl(fd, F_GETFD) != -1 || errno != EBADF)
+			continue;
+		if (open("/dev/null", O_RDWR) != fd)
+			return -1;
+	}
+
+	return 0;
+}
+
 /************************************************************************
  *
  * All code used for both PAM and shadow passwd goes in this section.
@@ -1032,13 +1088,13 @@ static int set_signal_handles(void)
 
 int main(int argc, char *argv[])
 {
-	char *new_context = NULL;	/* target security context */
-	char *old_context = NULL;	/* original security context */
-	char *tty_context = NULL;	/* current context of tty */
-	char *new_tty_context = NULL;	/* new context of tty */
+	char *new_context = NULL; /* target security context */
+	char *old_context = NULL; /* original security context */
+	char *tty_context = NULL; /* current context of tty */
+	char *new_tty_context = NULL; /* new context of tty */
 
-	struct passwd pw;	/* struct derived from passwd file line */
-	char *ttyn = NULL;	/* tty path */
+	struct passwd pw; /* struct derived from passwd file line */
+	char *ttyn = NULL; /* tty path */
 
 	char **old_environ;
 	int preserve_environment;
@@ -1046,19 +1102,17 @@ int main(int argc, char *argv[])
 	int fd;
 	pid_t childPid = 0;
 	char *shell_argv0 = NULL;
+	int enforcing;
 	int rc;
 
 #ifdef USE_PAM
-	int pam_status;		/* pam return code */
-	pam_handle_t *pam_handle;	/* opaque handle used by all PAM functions */
+	int pam_status; /* pam return code */
+	pam_handle_t *pam_handle; /* opaque handle used by all PAM functions */
 
 	/* This is a jump table of functions for PAM to use when it wants to *
 	 * communicate with the user.  We'll be using misc_conv(), which is  *
 	 * provided for us via pam_misc.h.                                   */
-	struct pam_conv pam_conversation = {
-		misc_conv,
-		NULL
-	};
+	struct pam_conv pam_conversation = { misc_conv, NULL };
 #endif
 
 	/*
@@ -1068,6 +1122,11 @@ int main(int argc, char *argv[])
 	 * if it makes sense to continue to run newrole, and setting up
 	 * a scrubbed environment.
 	 */
+	if (sanitize_std_fds()) {
+		fprintf(stderr,
+			_("Failed to sanitize standard file descriptors\n"));
+		return -1;
+	}
 	if (drop_capabilities(FALSE)) {
 		perror(_("Sorry, newrole failed to drop capabilities\n"));
 		return -1;
@@ -1090,7 +1149,8 @@ int main(int argc, char *argv[])
 		return -1;
 	}
 
-	if (security_getenforce() < 0) {
+	enforcing = security_getenforce();
+	if (enforcing < 0) {
 		fprintf(stderr, _("Could not determine enforcing mode.\n"));
 		return -1;
 	}
@@ -1113,7 +1173,8 @@ int main(int argc, char *argv[])
 	}
 
 	if (parse_command_line_arguments(argc, argv, ttyn, old_context,
-					 &new_context, &preserve_environment))
+					 &new_context, &preserve_environment,
+					 enforcing))
 		return -1;
 
 	/*
@@ -1144,9 +1205,8 @@ int main(int argc, char *argv[])
 			char *cmd = NULL;
 			rc = sscanf(argv[optind + 1], "%ms", &cmd);
 			if (rc != EOF && cmd) {
-				char *app_service_name =
-				    (char *)hashtab_search(app_service_names,
-							   cmd);
+				char *app_service_name = (char *)hashtab_search(
+					app_service_names, cmd);
 				free(cmd);
 				if (app_service_name != NULL)
 					service_name = app_service_name;
@@ -1178,7 +1238,8 @@ int main(int argc, char *argv[])
 	 * Once we authenticate the user, we know that we want to proceed with
 	 * the action. Prior to this point, no changes are made the to system.
 	 */
-	fd = relabel_tty(ttyn, new_context, &tty_context, &new_tty_context);
+	fd = relabel_tty(ttyn, new_context, &tty_context, &new_tty_context,
+			 enforcing);
 	if (fd < 0)
 		goto err_close_pam;
 
@@ -1208,15 +1269,17 @@ int main(int argc, char *argv[])
 		 */
 		pid_t pid;
 		int exit_code = 0;
-		int status;
+		int status = 0;
 
 		do {
-			pid = wait(&status);
+			pid = waitpid(childPid, &status, 0);
 		} while (pid < 0 && errno == EINTR);
 
 		/* Preserve child exit status, unless there is another error. */
 		if (WIFEXITED(status))
 			exit_code = WEXITSTATUS(status);
+		else if (WIFSIGNALED(status))
+			exit_code = 128 + WTERMSIG(status);
 
 		if (restore_tty_label(fd, ttyn, tty_context, new_tty_context)) {
 			fprintf(stderr, _("Unable to restore tty label...\n"));
@@ -1224,6 +1287,7 @@ int main(int argc, char *argv[])
 		}
 		freecon(tty_context);
 		freecon(new_tty_context);
+		freecon(old_context);
 		if (close(fd)) {
 			fprintf(stderr, _("Failed to close tty properly\n"));
 			exit_code = -1;
@@ -1281,7 +1345,6 @@ int main(int argc, char *argv[])
 		rc = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) & ~O_NONBLOCK);
 		if (rc)
 			goto err_close_pam;
-
 	}
 	/*
 	 * Step 5:  Execute a new shell with the new context in `new_context'. 
@@ -1318,8 +1381,10 @@ int main(int argc, char *argv[])
 		fprintf(stderr, _("Failed to send audit message"));
 		goto err_close_pam_session;
 	}
-	freecon(old_context); old_context=NULL;
-	freecon(new_context); new_context=NULL;
+	freecon(old_context);
+	old_context = NULL;
+	freecon(new_context);
+	new_context = NULL;
 
 #ifdef NAMESPACE_PRIV
 	if (transition_to_caller_uid()) {
@@ -1346,21 +1411,21 @@ int main(int argc, char *argv[])
 	 * If we reach here, then we failed to exec the new shell.
 	 */
 	perror(_("failed to exec shell\n"));
-      err_close_pam_session:
+err_close_pam_session:
 #ifdef NAMESPACE_PRIV
 	pam_status = pam_close_session(pam_handle, 0);
 	if (pam_status != PAM_SUCCESS)
 		fprintf(stderr, "pam_close_session failed with %s\n",
 			pam_strerror(pam_handle, pam_status));
 #endif
-      err_close_pam:
+err_close_pam:
 #ifdef USE_PAM
 	rc = pam_end(pam_handle, pam_status);
 	if (rc != PAM_SUCCESS)
 		fprintf(stderr, "pam_end failed with %s\n",
 			pam_strerror(pam_handle, rc));
 #endif
-      err_free:
+err_free:
 	freecon(tty_context);
 	freecon(new_tty_context);
 	freecon(old_context);
@@ -1376,4 +1441,4 @@ int main(int argc, char *argv[])
 	}
 #endif
 	return -1;
-}				/* main() */
+} /* main() */

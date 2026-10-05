@@ -29,6 +29,7 @@
 
 #include <errno.h>
 #include <unistd.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -42,6 +43,7 @@ extern char *semanage_text;
 
 static int parse_module_store(char *arg);
 static int parse_store_root_path(char *arg);
+static int parse_ro_store_root_paths(char *arg);
 static int parse_compiler_path(char *arg);
 static void semanage_conf_external_prog_destroy(external_prog_t *ep);
 static int new_external_prog(external_prog_t **chain);
@@ -61,7 +63,7 @@ static int parse_errors;
         char *s;
 }
 
-%token MODULE_STORE VERSION EXPAND_CHECK FILE_MODE SAVE_PREVIOUS SAVE_LINKED TARGET_PLATFORM COMPILER_DIR IGNORE_MODULE_CACHE STORE_ROOT OPTIMIZE_POLICY MULTIPLE_DECLS
+%token MODULE_STORE VERSION EXPAND_CHECK FILE_MODE SAVE_PREVIOUS SAVE_LINKED TARGET_PLATFORM COMPILER_DIR IGNORE_MODULE_CACHE STORE_ROOT RO_STORE_ROOT OPTIMIZE_POLICY MULTIPLE_DECLS SORT_LOCAL_FCONTEXTS
 %token LOAD_POLICY_START SETFILES_START SEFCONTEXT_COMPILE_START DISABLE_GENHOMEDIRCON HANDLE_UNKNOWN USEPASSWD IGNOREDIRS
 %token BZIP_BLOCKSIZE BZIP_SMALL RELABEL_STORE REMOVE_HLL
 %token VERIFY_MOD_START VERIFY_LINKED_START VERIFY_KERNEL_START BLOCK_END
@@ -84,6 +86,7 @@ single_opt:     module_store
         |       version
         |       target_platform
         |       store_root
+        |       ro_store_root
         |       compiler_dir
         |       ignore_module_cache
         |       expand_check
@@ -100,6 +103,7 @@ single_opt:     module_store
 	|	relabel_store
 	|	optimize_policy
 	|	multiple_decls
+        |       sort_local_fcontexts
         ;
 
 module_store:   MODULE_STORE '=' ARG {
@@ -121,6 +125,15 @@ store_root:     STORE_ROOT '=' ARG  {
                 }
         ;
 
+ro_store_root:  RO_STORE_ROOT '=' ARG  {
+                        if (parse_ro_store_root_paths($3) != 0) {
+                                parse_errors++;
+                                YYABORT;
+                        }
+                        free($3);
+                }
+        ;
+
 compiler_dir:       COMPILER_DIR '=' ARG  {
                         if (parse_compiler_path($3) != 0) {
                                 parse_errors++;
@@ -132,9 +145,9 @@ compiler_dir:       COMPILER_DIR '=' ARG  {
 
 ignore_module_cache:	IGNORE_MODULE_CACHE '=' ARG  {
 							if (strcasecmp($3, "true") == 0)
-								current_conf->ignore_module_cache = 1;
+								current_conf->ignore_module_cache = true;
 							else if (strcasecmp($3, "false") == 0)
-								current_conf->ignore_module_cache = 0;
+								current_conf->ignore_module_cache = false;
 							else {
 								yyerror("disable-caching can only be 'true' or 'false'");
 							}
@@ -168,15 +181,18 @@ target_platform: TARGET_PLATFORM '=' ARG  {
         ;
 
 expand_check:   EXPAND_CHECK '=' ARG  {
-                        char *endptr;
-                        long value;
-                        errno = 0;
-                        value = strtol($3, &endptr, 10);
-                        if (*endptr != '\0' || errno != 0 || (value != 0 && value != 1))
-                                yyerror("expand-check can only be '1' or '0'");
-                        else
-                                current_conf->expand_check = value;
-                        free($3);
+	                if (strcasecmp($3, "true") == 0)
+		                current_conf->expand_check = true;
+			else if (strcmp($3, "1") == 0)
+		                current_conf->expand_check = true;
+			else if (strcasecmp($3, "false") == 0)
+		                current_conf->expand_check = false;
+			else if (strcmp($3, "0") == 0)
+		                current_conf->expand_check = false;
+			else {
+				yyerror("expand-check can only be 'true', '1', 'false' or '0'");
+			}
+			free($3);
                 }
         ;
 
@@ -195,9 +211,9 @@ file_mode:   FILE_MODE '=' ARG  {
 
 save_previous:    SAVE_PREVIOUS '=' ARG {
 	                if (strcasecmp($3, "true") == 0)
-		                current_conf->save_previous = 1;
+		                current_conf->save_previous = true;
 			else if (strcasecmp($3, "false") == 0)
-				current_conf->save_previous = 0;
+				current_conf->save_previous = false;
 			else {
 				yyerror("save-previous can only be 'true' or 'false'");
 			}
@@ -208,9 +224,9 @@ save_previous:    SAVE_PREVIOUS '=' ARG {
 
 save_linked:    SAVE_LINKED '=' ARG {
 	                if (strcasecmp($3, "true") == 0)
-		                current_conf->save_linked = 1;
+		                current_conf->save_linked = true;
 			else if (strcasecmp($3, "false") == 0)
-				current_conf->save_linked = 0;
+				current_conf->save_linked = false;
 			else {
 				yyerror("save-linked can only be 'true' or 'false'");
 			}
@@ -220,9 +236,9 @@ save_linked:    SAVE_LINKED '=' ARG {
 
 disable_genhomedircon: DISABLE_GENHOMEDIRCON '=' ARG {
 	if (strcasecmp($3, "false") == 0) {
-		current_conf->disable_genhomedircon = 0;
+		current_conf->disable_genhomedircon = false;
 	} else if (strcasecmp($3, "true") == 0) {
-		current_conf->disable_genhomedircon = 1;
+		current_conf->disable_genhomedircon = true;
 	} else {
 		yyerror("disable-genhomedircon can only be 'true' or 'false'");
 	}
@@ -231,9 +247,9 @@ disable_genhomedircon: DISABLE_GENHOMEDIRCON '=' ARG {
 
 usepasswd: USEPASSWD '=' ARG {
 	if (strcasecmp($3, "false") == 0) {
-		current_conf->usepasswd = 0;
+		current_conf->usepasswd = false;
 	} else if (strcasecmp($3, "true") == 0) {
-		current_conf->usepasswd = 1;
+		current_conf->usepasswd = true;
 	} else {
 		yyerror("usepasswd can only be 'true' or 'false'");
 	}
@@ -272,9 +288,9 @@ bzip_blocksize:  BZIP_BLOCKSIZE '=' ARG {
 
 bzip_small:  BZIP_SMALL '=' ARG {
 	if (strcasecmp($3, "false") == 0) {
-		current_conf->bzip_small = 0;
+		current_conf->bzip_small = false;
 	} else if (strcasecmp($3, "true") == 0) {
-		current_conf->bzip_small = 1;
+		current_conf->bzip_small = true;
 	} else {
 		yyerror("bzip-small can only be 'true' or 'false'");
 	}
@@ -283,9 +299,9 @@ bzip_small:  BZIP_SMALL '=' ARG {
 
 remove_hll:  REMOVE_HLL'=' ARG {
 	if (strcasecmp($3, "false") == 0) {
-		current_conf->remove_hll = 0;
+		current_conf->remove_hll = false;
 	} else if (strcasecmp($3, "true") == 0) {
-		current_conf->remove_hll = 1;
+		current_conf->remove_hll = true;
 	} else {
 		yyerror("remove-hll can only be 'true' or 'false'");
 	}
@@ -294,9 +310,9 @@ remove_hll:  REMOVE_HLL'=' ARG {
 
 relabel_store:  RELABEL_STORE'=' ARG {
 	if (strcasecmp($3, "false") == 0) {
-		current_conf->relabel_store = 0;
+		current_conf->relabel_store = false;
 	} else if (strcasecmp($3, "true") == 0) {
-		current_conf->relabel_store = 1;
+		current_conf->relabel_store = true;
 	} else {
 		yyerror("relabel_store can only be 'true' or 'false'");
 	}
@@ -305,9 +321,9 @@ relabel_store:  RELABEL_STORE'=' ARG {
 
 optimize_policy:  OPTIMIZE_POLICY '=' ARG {
 	if (strcasecmp($3, "false") == 0) {
-		current_conf->optimize_policy = 0;
+		current_conf->optimize_policy = false;
 	} else if (strcasecmp($3, "true") == 0) {
-		current_conf->optimize_policy = 1;
+		current_conf->optimize_policy = true;
 	} else {
 		yyerror("optimize-policy can only be 'true' or 'false'");
 	}
@@ -316,11 +332,22 @@ optimize_policy:  OPTIMIZE_POLICY '=' ARG {
 
 multiple_decls:  MULTIPLE_DECLS '=' ARG {
 	if (strcasecmp($3, "false") == 0) {
-		current_conf->multiple_decls = 0;
+		current_conf->multiple_decls = false;
 	} else if (strcasecmp($3, "true") == 0) {
-		current_conf->multiple_decls = 1;
+		current_conf->multiple_decls = true;
 	} else {
 		yyerror("multiple-decls can only be 'true' or 'false'");
+	}
+	free($3);
+}
+
+sort_local_fcontexts: SORT_LOCAL_FCONTEXTS '=' ARG {
+	if (strcasecmp($3, "false") == 0) {
+		current_conf->sort_local_fcontexts = false;
+	} else if (strcasecmp($3, "true") == 0) {
+		current_conf->sort_local_fcontexts = true;
+	} else {
+		yyerror("sort-local-fcontexts can only be 'true' or 'false'");
 	}
 	free($3);
 }
@@ -398,26 +425,34 @@ static int semanage_conf_init(semanage_conf_t * conf)
 	const char *policy_root = selinux_policy_root();
 	if (policy_root != NULL) {
 		conf->store_path = strdup(semanage_basename(policy_root));
+		if (!conf->store_path)
+			return -1;
 	}
 	conf->ignoredirs = NULL;
 	conf->store_root_path = strdup("/var/lib/selinux");
+	if (!conf->store_root_path)
+		return -1;
 	conf->compiler_directory_path = strdup("/usr/libexec/selinux/hll");
+	if (!conf->compiler_directory_path)
+		return -1;
 	conf->policyvers = sepol_policy_kern_vers_max();
 	conf->target_platform = SEPOL_TARGET_SELINUX;
 	conf->expand_check = 1;
 	conf->handle_unknown = -1;
-	conf->usepasswd = 1;
+	conf->usepasswd = true;
 	conf->file_mode = 0644;
 	conf->bzip_blocksize = 9;
-	conf->bzip_small = 0;
-	conf->ignore_module_cache = 0;
-	conf->remove_hll = 0;
-	conf->relabel_store = 1;
-	conf->optimize_policy = 1;
-	conf->multiple_decls = 1;
+	conf->bzip_small = false;
+	conf->ignore_module_cache = false;
+	conf->remove_hll = false;
+	conf->relabel_store = true;
+	conf->optimize_policy = true;
+	conf->multiple_decls = true;
+	conf->sort_local_fcontexts = false;
 
-	conf->save_previous = 0;
-	conf->save_linked = 0;
+	conf->save_previous = false;
+	conf->save_linked = false;
+	conf->disable_genhomedircon = false;
 
 	if (!conf->store_path ||
 	    !conf->store_root_path ||
@@ -523,6 +558,9 @@ void semanage_conf_destroy(semanage_conf_t * conf)
 		free(conf->store_path);
 		free(conf->ignoredirs);
 		free(conf->store_root_path);
+		while (conf->n_ro_store_roots)
+			free(conf->ro_store_root_paths[--conf->n_ro_store_roots]);
+		free(conf->ro_store_root_paths);
 		free(conf->compiler_directory_path);
 		semanage_conf_external_prog_destroy(conf->load_policy);
 		semanage_conf_external_prog_destroy(conf->setfiles);
@@ -598,6 +636,47 @@ static int parse_store_root_path(char *arg)
 
 	free(current_conf->store_root_path);
 	current_conf->store_root_path = strdup(arg);
+	return 0;
+}
+
+/* ro-store-root = /usr/lib/selinux[:/another/root...] */
+static int parse_ro_store_root_paths(char *arg)
+{
+	char *p, *saveptr = NULL;
+	unsigned int n = 0;
+	char **v;
+
+	if (arg == NULL) {
+		return -1;
+	}
+
+	for (p = arg; *p; p++)
+		if (*p == ':')
+			n++;
+	n++;
+
+	v = calloc(n, sizeof(*v));
+	if (!v)
+		return -1;
+
+	n = 0;
+	for (p = strtok_r(arg, ":", &saveptr); p;
+	     p = strtok_r(NULL, ":", &saveptr)) {
+		v[n] = strdup(p);
+		if (!v[n]) {
+			while (n)
+				free(v[--n]);
+			free(v);
+			return -1;
+		}
+		n++;
+	}
+
+	while (current_conf->n_ro_store_roots)
+		free(current_conf->ro_store_root_paths[--current_conf->n_ro_store_roots]);
+	free(current_conf->ro_store_root_paths);
+	current_conf->ro_store_root_paths = v;
+	current_conf->n_ro_store_roots = n;
 	return 0;
 }
 

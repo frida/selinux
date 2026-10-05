@@ -19,13 +19,12 @@
 /*
  * copied from the selinux/include/security.h
  */
-struct selinux_status_t
-{
-	uint32_t	version;	/* version number of this structure */
-	uint32_t	sequence;	/* sequence number of seqlock logic */
-	uint32_t	enforcing;	/* current setting of enforcing mode */
-	uint32_t	policyload;	/* times of policy reloaded */
-	uint32_t	deny_unknown;	/* current setting of deny_unknown */
+struct selinux_status_t {
+	uint32_t version; /* version number of this structure */
+	uint32_t sequence; /* sequence number of seqlock logic */
+	uint32_t enforcing; /* current setting of enforcing mode */
+	uint32_t policyload; /* times of policy reloaded */
+	uint32_t deny_unknown; /* current setting of deny_unknown */
 	/* version > 0 support above status */
 } __attribute((packed));
 
@@ -37,14 +36,15 @@ struct selinux_status_t
  * Valid Pointer : opened and mapped correctly
  */
 static struct selinux_status_t *selinux_status = NULL;
-static uint32_t			last_seqno;
-static uint32_t			last_policyload;
+static pthread_mutex_t status_lock = PTHREAD_MUTEX_INITIALIZER;
+static uint32_t last_seqno;
+static uint32_t last_policyload;
 
-static uint32_t			fallback_sequence;
-static int			fallback_enforcing;
-static int			fallback_policyload;
+static uint32_t fallback_sequence;
+static int fallback_enforcing;
+static int fallback_policyload;
 
-static void			*fallback_netlink_thread = NULL;
+static void *fallback_netlink_thread = NULL;
 
 /*
  * read_sequence
@@ -60,7 +60,7 @@ static void			*fallback_netlink_thread = NULL;
  */
 static inline uint32_t read_sequence(struct selinux_status_t *status)
 {
-	uint32_t	seqno = 0;
+	uint32_t seqno = 0;
 
 	do {
 		/*
@@ -89,19 +89,35 @@ static inline uint32_t read_sequence(struct selinux_status_t *status)
  */
 int selinux_status_updated(void)
 {
-	uint32_t	curr_seqno;
-	uint32_t	tmp_seqno;
-	uint32_t	enforcing;
-	uint32_t	policyload;
+	uint32_t curr_seqno;
+	uint32_t tmp_seqno;
+	uint32_t enforcing;
+	uint32_t policyload;
 
 	if (selinux_status == NULL) {
 		errno = EINVAL;
 		return -1;
 	}
 
+	/*
+	 * Fast path with no locking is only possible when the status page
+	 * is mapped, the last_seqno is even (stable) and it matches the
+	 * curr_seqno.
+	 */
+	if (selinux_status != MAP_FAILED) {
+		curr_seqno = read_sequence(selinux_status);
+		if ((last_seqno & 0x0001) == 0 && curr_seqno == last_seqno)
+			return 0;
+	}
+
+	/* Otherwise we have to take the mutex and re-check */
+	__pthread_mutex_lock(&status_lock);
+
 	if (selinux_status == MAP_FAILED) {
-		if (avc_netlink_check_nb() < 0)
+		if (avc_netlink_check_nb() < 0) {
+			__pthread_mutex_unlock(&status_lock);
 			return -1;
+		}
 
 		curr_seqno = fallback_sequence;
 	} else {
@@ -118,8 +134,16 @@ int selinux_status_updated(void)
 	if (last_seqno & 0x0001)
 		last_seqno = curr_seqno;
 
-	if (last_seqno == curr_seqno)
+	if (last_seqno == curr_seqno) {
+		__pthread_mutex_unlock(&status_lock);
 		return 0;
+	}
+
+	if (selinux_status == MAP_FAILED) {
+		last_seqno = curr_seqno;
+		__pthread_mutex_unlock(&status_lock);
+		return 1;
+	}
 
 	/* sequence must not be changed during references */
 	do {
@@ -129,17 +153,22 @@ int selinux_status_updated(void)
 		curr_seqno = read_sequence(selinux_status);
 	} while (tmp_seqno != curr_seqno);
 
-	if (avc_enforcing != (int) enforcing) {
-		if (avc_process_setenforce(enforcing) < 0)
+	if (avc_enforcing != (int)enforcing) {
+		if (avc_process_setenforce(enforcing) < 0) {
+			__pthread_mutex_unlock(&status_lock);
 			return -1;
+		}
 	}
 	if (last_policyload != policyload) {
-		if (avc_process_policyload(policyload) < 0)
+		if (avc_process_policyload(policyload) < 0) {
+			__pthread_mutex_unlock(&status_lock);
 			return -1;
+		}
 		last_policyload = policyload;
 	}
 	last_seqno = curr_seqno;
 
+	__pthread_mutex_unlock(&status_lock);
 	return 1;
 }
 
@@ -151,8 +180,8 @@ int selinux_status_updated(void)
  */
 int selinux_status_getenforce(void)
 {
-	uint32_t	seqno;
-	uint32_t	enforcing;
+	uint32_t seqno;
+	uint32_t enforcing;
 
 	if (selinux_status == NULL) {
 		errno = EINVAL;
@@ -160,10 +189,12 @@ int selinux_status_getenforce(void)
 	}
 
 	if (selinux_status == MAP_FAILED) {
-		if (avc_netlink_check_nb() < 0)
-			return -1;
+		int rc;
 
-		return fallback_enforcing;
+		__pthread_mutex_lock(&status_lock);
+		rc = (avc_netlink_check_nb() < 0) ? -1 : fallback_enforcing;
+		__pthread_mutex_unlock(&status_lock);
+		return rc;
 	}
 
 	/* sequence must not be changed during references */
@@ -188,8 +219,8 @@ int selinux_status_getenforce(void)
  */
 int selinux_status_policyload(void)
 {
-	uint32_t	seqno;
-	uint32_t	policyload;
+	uint32_t seqno;
+	uint32_t policyload;
 
 	if (selinux_status == NULL) {
 		errno = EINVAL;
@@ -197,10 +228,12 @@ int selinux_status_policyload(void)
 	}
 
 	if (selinux_status == MAP_FAILED) {
-		if (avc_netlink_check_nb() < 0)
-			return -1;
+		int rc;
 
-		return fallback_policyload;
+		__pthread_mutex_lock(&status_lock);
+		rc = (avc_netlink_check_nb() < 0) ? -1 : fallback_policyload;
+		__pthread_mutex_unlock(&status_lock);
+		return rc;
 	}
 
 	/* sequence must not be changed during references */
@@ -223,8 +256,8 @@ int selinux_status_policyload(void)
  */
 int selinux_status_deny_unknown(void)
 {
-	uint32_t	seqno;
-	uint32_t	deny_unknown;
+	uint32_t seqno;
+	uint32_t deny_unknown;
 
 	if (selinux_status == NULL) {
 		errno = EINVAL;
@@ -277,10 +310,10 @@ static int fallback_cb_policyload(int policyload)
  */
 int selinux_status_open(int fallback)
 {
-	int		fd;
-	char		path[PATH_MAX];
-	long		pagesize;
-	uint32_t	seqno;
+	int fd;
+	char path[PATH_MAX];
+	long pagesize;
+	uint32_t seqno;
 
 	if (selinux_status != NULL) {
 		return (selinux_status == MAP_FAILED) ? 1 : 0;
@@ -328,7 +361,7 @@ error:
 	 * receive event notification.
 	 */
 	if (fallback && avc_netlink_open(0) == 0) {
-		union selinux_callback	cb;
+		union selinux_callback cb;
 
 		/* register my callbacks */
 		cb.func_setenforce = fallback_cb_setenforce;
@@ -340,9 +373,9 @@ error:
 		selinux_status = MAP_FAILED;
 		last_seqno = (uint32_t)(-1);
 
-		if (avc_using_threads)
-		{
-			fallback_netlink_thread = avc_create_thread(&avc_netlink_loop);
+		if (avc_using_threads) {
+			fallback_netlink_thread =
+				avc_create_thread(&avc_netlink_loop);
 		}
 
 		fallback_sequence = 0;
@@ -371,8 +404,7 @@ void selinux_status_close(void)
 		return;
 
 	/* fallback-mode */
-	if (selinux_status == MAP_FAILED)
-	{
+	if (selinux_status == MAP_FAILED) {
 		if (avc_using_threads)
 			avc_stop_thread(fallback_netlink_thread);
 

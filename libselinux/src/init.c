@@ -17,7 +17,7 @@
 #include "setrans_internal.h"
 
 char *selinux_mnt = NULL;
-int selinux_page_size = 0;
+size_t selinux_page_size = 0;
 
 int has_selinux_config = 0;
 
@@ -81,53 +81,11 @@ int selinuxfs_exists(void)
 
 static void init_selinuxmnt(void)
 {
-	char *buf = NULL, *p;
-	FILE *fp = NULL;
-	size_t len;
-	ssize_t num;
-
 	if (selinux_mnt)
 		return;
 
-	if (verify_selinuxmnt(SELINUXMNT) == 0) return;
-
-	if (verify_selinuxmnt(OLDSELINUXMNT) == 0) return;
-
-	/* Drop back to detecting it the long way. */
-	if (!selinuxfs_exists())
-		goto out;
-
-	/* At this point, the usual spot doesn't have an selinuxfs so
-	 * we look around for it */
-	fp = fopen("/proc/mounts", "re");
-	if (!fp)
-		goto out;
-
-	__fsetlocking(fp, FSETLOCKING_BYCALLER);
-	while ((num = getline(&buf, &len, fp)) != -1) {
-		char *tmp;
-		p = strchr(buf, ' ');
-		if (!p)
-			goto out;
-		p++;
-		tmp = strchr(p, ' ');
-		if (!tmp)
-			goto out;
-		if (!strncmp(tmp + 1, SELINUXFS" ", strlen(SELINUXFS)+1)) {
-			*tmp = '\0';
-			break;
-		}
-	}
-
-	/* If we found something, dup it */
-	if (num > 0)
-		verify_selinuxmnt(p);
-
-      out:
-	free(buf);
-	if (fp)
-		fclose(fp);
-	return;
+	if (verify_selinuxmnt(SELINUXMNT) == 0)
+		return;
 }
 
 void fini_selinuxmnt(void)
@@ -136,24 +94,39 @@ void fini_selinuxmnt(void)
 	selinux_mnt = NULL;
 }
 
-
 void set_selinuxmnt(const char *mnt)
 {
 	selinux_mnt = strdup(mnt);
 }
 
-
-static void init_lib(void) __attribute__ ((constructor));
+static void init_lib(void) __attribute__((constructor));
 static void init_lib(void)
 {
-	selinux_page_size = sysconf(_SC_PAGE_SIZE);
+	long page_size;
+#ifndef ANDROID
+	unsigned int i;
+	char cfg[PATH_MAX];
+#endif
+
+	SELINUX_PROTECT_ERRNO;
+	page_size = sysconf(_SC_PAGE_SIZE);
+	/* Fall back to a sane default if sysconf() fails or returns an implausible value. */
+	selinux_page_size = (page_size > 0 && page_size <= INT_MAX) ?
+				    (size_t)page_size :
+				    4096;
 	init_selinuxmnt();
 #ifndef ANDROID
-	has_selinux_config = (access(SELINUXCONFIG, F_OK) == 0);
+	for (i = 0; selinux_confdirs[i]; i++) {
+		snprintf(cfg, sizeof(cfg), "%sconfig", selinux_confdirs[i]);
+		if (access(cfg, F_OK) == 0) {
+			has_selinux_config = 1;
+			break;
+		}
+	}
 #endif
 }
 
-static void fini_lib(void) __attribute__ ((destructor));
+static void fini_lib(void) __attribute__((destructor));
 static void fini_lib(void)
 {
 	fini_selinuxmnt();

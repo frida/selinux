@@ -33,7 +33,9 @@ extern int yylex_destroy(void);
 jmp_buf fuzzing_pre_parse_stack_state;
 
 // Set to 1 for verbose libsepol logging
+#ifndef VERBOSE
 #define VERBOSE 0
+#endif
 
 static ssize_t full_write(int fd, const void *buf, size_t count)
 {
@@ -106,8 +108,6 @@ static int read_source_policy(policydb_t *p, const uint8_t *data, size_t size)
 	}
 
 	rc = yyparse();
-	// TODO: drop global variable policydb_errors if proven to be redundant
-	assert(rc || !policydb_errors);
 	if (rc || policydb_errors) {
 		queue_destroy(id_queue);
 		fclose(yyin);
@@ -120,7 +120,6 @@ static int read_source_policy(policydb_t *p, const uint8_t *data, size_t size)
 	yyrestart(yyin);
 
 	rc = yyparse();
-	assert(rc || !policydb_errors);
 	if (rc || policydb_errors) {
 		queue_destroy(id_queue);
 		fclose(yyin);
@@ -159,16 +158,22 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 	/*
 	 * Take the first byte whether to generate a SELinux or Xen policy,
 	 * the second byte whether to parse as MLS policy,
-	 * and the second byte as policy version.
+	 * and the third byte as policy version.
 	 */
 	if (size < 3)
 		return 0;
 	switch (data[0]) {
 	case 'S':
 		platform = SEPOL_TARGET_SELINUX;
+#if VERBOSE
+		printf("target: SELinux\n");
+#endif
 		break;
 	case 'X':
 		platform = SEPOL_TARGET_XEN;
+#if VERBOSE
+		printf("target: Xen\n");
+#endif
 		break;
 	default:
 		return 0;
@@ -176,17 +181,33 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 	switch (data[1]) {
 	case '0':
 		mls = 0;
+#if VERBOSE
+		printf("MLS-disabled\n");
+#endif
 		break;
 	case '1':
 		mls = 1;
+#if VERBOSE
+		printf("MLS-enabled\n");
+#endif
 		break;
 	default:
 		return 0;
 	}
-	static_assert(0x7F - 'A' >= POLICYDB_VERSION_MAX, "Max policy version should be representable");
+	static_assert(0x7F - 'A' >= POLICYDB_VERSION_MAX,
+		      "Max policy version should be representable");
 	policyvers = data[2] - 'A';
-	if (policyvers < POLICYDB_VERSION_MIN || policyvers > POLICYDB_VERSION_MAX)
+	if (platform == SEPOL_TARGET_SELINUX &&
+	    (policyvers < POLICYDB_VERSION_MIN ||
+	     policyvers > POLICYDB_VERSION_MAX))
 		return 0;
+	if (platform == SEPOL_TARGET_XEN &&
+	    (policyvers < POLICYDB_XEN_VERSION_MIN ||
+	     policyvers > POLICYDB_XEN_VERSION_MAX))
+		return 0;
+#if VERBOSE
+	printf("policyvers=%d\n", policyvers);
+#endif
 	data += 3;
 	size -= 3;
 
@@ -209,24 +230,27 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 		if (policydb_init(&kernpolicydb))
 			goto exit;
 
-		if (expand_module(NULL, &parsepolicydb, &kernpolicydb, VERBOSE, /*check_assertions=*/0))
+		if (expand_module(NULL, &parsepolicydb, &kernpolicydb, VERBOSE,
+				  /*check_assertions=*/0))
 			goto exit;
 
-		(void) check_assertions(NULL, &kernpolicydb, kernpolicydb.global->branch_list->avrules);
-		(void) hierarchy_check_constraints(NULL, &kernpolicydb);
+		(void)check_assertions(
+			NULL, &kernpolicydb,
+			kernpolicydb.global->branch_list->avrules);
+		(void)hierarchy_check_constraints(NULL, &kernpolicydb);
 
 		kernpolicydb.policyvers = policyvers;
 
-		assert(kernpolicydb.policy_type     == POLICY_KERN);
-		assert(kernpolicydb.handle_unknown  == SEPOL_DENY_UNKNOWN);
-		assert(kernpolicydb.mls             == mls);
+		assert(kernpolicydb.policy_type == POLICY_KERN);
+		assert(kernpolicydb.handle_unknown == SEPOL_DENY_UNKNOWN);
+		assert(kernpolicydb.mls == mls);
 		assert(kernpolicydb.target_platform == platform);
 
 		finalpolicydb = &kernpolicydb;
 	} else {
-		assert(parsepolicydb.policy_type     == POLICY_MOD);
-		assert(parsepolicydb.handle_unknown  == SEPOL_DENY_UNKNOWN);
-		assert(parsepolicydb.mls             == mls);
+		assert(parsepolicydb.policy_type == POLICY_MOD);
+		assert(parsepolicydb.handle_unknown == SEPOL_DENY_UNKNOWN);
+		assert(parsepolicydb.mls == mls);
 		assert(parsepolicydb.target_platform == platform);
 
 		finalpolicydb = &parsepolicydb;
@@ -235,7 +259,8 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 	if (policydb_load_isids(finalpolicydb, &sidtab))
 		goto exit;
 
-	if (finalpolicydb->policy_type == POLICY_KERN && policydb_optimize(finalpolicydb))
+	if (finalpolicydb->policy_type == POLICY_KERN &&
+	    policydb_optimize(finalpolicydb))
 		goto exit;
 
 	if (policydb_sort_ocontexts(finalpolicydb))
@@ -252,13 +277,16 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 	if (write_binary_policy(devnull, finalpolicydb))
 		abort();
 
-	if (finalpolicydb->policy_type == POLICY_KERN && sepol_kernel_policydb_to_conf(devnull, finalpolicydb))
+	if (finalpolicydb->policy_type == POLICY_KERN &&
+	    sepol_kernel_policydb_to_conf(devnull, finalpolicydb))
 		abort();
 
-	if (finalpolicydb->policy_type == POLICY_KERN && sepol_kernel_policydb_to_cil(devnull, finalpolicydb))
+	if (finalpolicydb->policy_type == POLICY_KERN &&
+	    sepol_kernel_policydb_to_cil(devnull, finalpolicydb))
 		abort();
 
-	if (finalpolicydb->policy_type == POLICY_MOD && sepol_module_policydb_to_cil(devnull, finalpolicydb, /*linked=*/0))
+	if (finalpolicydb->policy_type == POLICY_MOD &&
+	    sepol_module_policydb_to_cil(devnull, finalpolicydb, /*linked=*/0))
 		abort();
 
 exit:
@@ -276,3 +304,39 @@ exit:
 	/* Non-zero return values are reserved for future use. */
 	return 0;
 }
+
+#ifdef DEFINEMAIN
+#include <sys/stat.h>
+
+int main(int argc, char **argv)
+{
+	if (argc < 2) {
+		fprintf(stderr, "usage: %s fuzzer-input-file\n", argv[0]);
+		exit(1);
+	}
+
+	FILE *fp = fopen(argv[1], "rb");
+	if (!fp) {
+		perror(argv[1]);
+		exit(1);
+	}
+
+	struct stat sb;
+	int rc;
+
+	rc = fstat(fileno(fp), &sb);
+	if (rc < 0) {
+		perror("fstat");
+		exit(1);
+	}
+
+	void *address = mmap(NULL, sb.st_size, PROT_READ | PROT_WRITE,
+			     MAP_PRIVATE, fileno(fp), 0);
+	if (address == MAP_FAILED) {
+		perror("mmap");
+		exit(1);
+	}
+
+	return LLVMFuzzerTestOneInput(address, sb.st_size);
+}
+#endif

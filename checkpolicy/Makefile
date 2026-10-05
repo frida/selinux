@@ -51,11 +51,16 @@ lex.yy.c: policy_scan.l y.tab.c
 	$(LEX) policy_scan.l
 
 .PHONY: test
-test: checkpolicy
+test: checkpolicy checkmodule
 	./tests/test_roundtrip.sh
+	./tests/test_checkmodule_negative.sh
 
 # helper target for fuzzing
 checkobjects: $(CHECKOBJS)
+
+.PHONY: fuzz
+fuzz:
+	$(MAKE) -C fuzz
 
 install: all
 	-mkdir -p $(DESTDIR)$(BINDIR)
@@ -77,3 +82,4 @@ relabel: install
 clean:
 	-rm -f $(TARGETS) $(CHECKPOLOBJS) $(CHECKMODOBJS) y.tab.c y.tab.h lex.yy.c tests/testpol.conf tests/testpol.bin
 	$(MAKE) -C test clean
+	$(MAKE) -C fuzz clean

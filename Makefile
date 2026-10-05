@@ -4,6 +4,8 @@ SUBDIRS=libsepol libselinux libsemanage checkpolicy secilc policycoreutils $(OPT
 PYSUBDIRS=libselinux libsemanage
 DISTCLEANSUBDIRS=libselinux libsemanage
 
+CLANG_FORMAT ?= clang-format
+
 ifeq ($(DEBUG),1)
 	export CFLAGS = -g3 -O0 -gdwarf-2 -fno-strict-aliasing -Wall -Wshadow -Werror
 	export LDFLAGS = -g
@@ -23,6 +25,12 @@ else
 		-Wunused \
 		-Wwrite-strings \
 		-fno-common
+endif
+
+# check for fts_* availability
+H := \#
+ifneq (yes,$(shell printf '${H}include <fts.h>\nint main(void){return fts_close((void*)0);}' | $(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -Werror=implicit-function-declaration -x c -o /dev/null - >/dev/null 2>&1 && echo yes))
+export FTS_LDLIBS := -lfts
 endif
 
 ifneq ($(DESTDIR),)
@@ -55,7 +63,7 @@ distclean:
 FORMAT_SOURCE_FILES := $(shell find $(SUBDIRS) -type f \( -name '*.c' -o -name '*.h' \))
 
 format:
-	clang-format -i $(FORMAT_SOURCE_FILES)
+	$(CLANG_FORMAT) -i $(FORMAT_SOURCE_FILES)
 
 check-format:
-	clang-format --dry-run -Werror $(FORMAT_SOURCE_FILES)
+	$(CLANG_FORMAT) --dry-run -Werror $(FORMAT_SOURCE_FILES)

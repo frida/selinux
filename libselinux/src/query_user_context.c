@@ -9,11 +9,11 @@
  *            to the user.  Returns the number (position in the list) of
  *            the user selected context.
  */
-static int context_menu(char ** list)
+static int context_menu(char **list)
 {
-	int i;			/* array index                        */
-	int choice = 0;		/* index of the user's choice         */
-	char response[10];	/* string to hold the user's response */
+	int i; /* array index                        */
+	int choice = 0; /* index of the user's choice         */
+	char response[10]; /* string to hold the user's response */
 
 	printf("\n\n");
 	for (i = 0; list[i]; i++)
@@ -21,10 +21,8 @@ static int context_menu(char ** list)
 
 	while ((choice < 1) || (choice > i)) {
 		printf("Enter number of choice: ");
-		fflush(stdin);
 		if (fgets(response, sizeof(response), stdin) == NULL)
 			continue;
-		fflush(stdin);
 		choice = strtol(response, NULL, 10);
 	}
 
@@ -35,10 +33,10 @@ static int context_menu(char ** list)
  *                  default is the first context in the list.  Returns 0 on
  *                  success, -1 on failure
  */
-int query_user_context(char ** list, char ** usercon)
+int query_user_context(char **list, char **usercon)
 {
-	char response[10];	/* The user's response                        */
-	int choice;		/* The index in the list of the sid chosen by
+	char response[10]; /* The user's response                        */
+	int choice; /* The index in the list of the sid chosen by
 				   the user                                   */
 
 	if (!list[0])
@@ -47,10 +45,8 @@ int query_user_context(char ** list, char ** usercon)
 	printf("\nYour default context is %s.\n", list[0]);
 	if (list[1]) {
 		printf("Do you want to choose a different one? [n]");
-		fflush(stdin);
 		if (fgets(response, sizeof(response), stdin) == NULL)
 			return -1;
-		fflush(stdin);
 
 		if ((response[0] == 'y') || (response[0] == 'Y')) {
 			choice = context_menu(list);
@@ -77,15 +73,13 @@ int query_user_context(char ** list, char ** usercon)
  */
 static void get_field(const char *fieldstr, char *newfield, int newfieldlen)
 {
-	int done = 0;		/* true if a non-empty field has been obtained */
+	int done = 0; /* true if a non-empty field has been obtained */
 
-	while (!done) {		/* Keep going until we get a value for the field */
+	while (!done) { /* Keep going until we get a value for the field */
 		printf("\tEnter %s ", fieldstr);
-		fflush(stdin);
 		if (fgets(newfield, newfieldlen, stdin) == NULL)
 			continue;
-		fflush(stdin);
-		if (newfield[strlen(newfield) - 1] == '\n')
+		if (newfield[0] && newfield[strlen(newfield) - 1] == '\n')
 			newfield[strlen(newfield) - 1] = '\0';
 
 		if (strlen(newfield) == 0) {
@@ -103,20 +97,21 @@ static void get_field(const char *fieldstr, char *newfield, int newfieldlen)
  *                     context chosen by the user into usercon.  Returns 0
  *                     on success.
  */
-int manual_user_enter_context(const char *user, char ** newcon)
+int manual_user_enter_context(const char *user, char **newcon)
 {
-	char response[10];	/* Used to get yes or no answers from user */
-	char role[100];		/* The role requested by the user          */
+	char response[10]; /* Used to get yes or no answers from user */
+	char role[100]; /* The role requested by the user          */
 	int rolelen = 100;
-	char type[100];		/* The type requested by the user          */
+	char type[100]; /* The type requested by the user          */
 	int typelen = 100;
-	char level[100];	/* The level requested by the user         */
+	char level[100]; /* The level requested by the user         */
 	int levellen = 100;
 	int mls_enabled = is_selinux_mls_enabled();
 
-	context_t new_context;	/* The new context chosen by the user     */
-	const char *user_context = NULL;	/* String value of the user's context     */
-	int done = 0;		/* true if a valid sid has been obtained  */
+	context_t new_context; /* The new context chosen by the user     */
+	const char *user_context =
+		NULL; /* String value of the user's context     */
+	int done = 0; /* true if a valid sid has been obtained  */
 
 	/* Initialize the context.  How this is done depends on whether
 	   or not MLS is enabled                                        */
@@ -130,8 +125,8 @@ int manual_user_enter_context(const char *user, char ** newcon)
 
 	while (!done) {
 		printf("Would you like to enter a security context? [y]");
-		if (fgets(response, sizeof(response), stdin) == NULL
-		    || (response[0] == 'n') || (response[0] == 'N')) {
+		if (fgets(response, sizeof(response), stdin) == NULL ||
+		    (response[0] == 'n') || (response[0] == 'N')) {
 			context_free(new_context);
 			return -1;
 		}

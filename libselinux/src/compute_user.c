@@ -10,8 +10,7 @@
 #include <limits.h>
 #include "callbacks.h"
 
-int security_compute_user_raw(const char * scon,
-			      const char *user, char *** con)
+int security_compute_user_raw(const char *scon, const char *user, char ***con)
 {
 	char path[PATH_MAX];
 	char **ary;
@@ -25,7 +24,9 @@ int security_compute_user_raw(const char * scon,
 		return -1;
 	}
 
-	selinux_log(SELINUX_WARNING, "Direct use of security_compute_user() is deprecated, switch to get_ordered_context_list()\n");
+	selinux_log(
+		SELINUX_WARNING,
+		"Direct use of security_compute_user() is deprecated, switch to get_ordered_context_list()\n");
 
 	snprintf(path, sizeof path, "%s/user", selinux_mnt);
 	fd = open(path, O_RDWR | O_CLOEXEC);
@@ -60,7 +61,9 @@ int security_compute_user_raw(const char * scon,
 		goto out;
 	}
 
-	ary = malloc((nel + 1) * sizeof(char *));
+	/* calloc() rejects the (nel + 1) * sizeof(char *) multiplication
+	 * overflow that a bogus, very large nel would otherwise wrap to 0. */
+	ary = calloc((size_t)nel + 1, sizeof(char *));
 	if (!ary) {
 		ret = -1;
 		goto out;
@@ -68,6 +71,14 @@ int security_compute_user_raw(const char * scon,
 
 	ptr = buf + strlen(buf) + 1;
 	for (i = 0; i < nel; i++) {
+		/* Bound the walk to the data actually read into buf, in case
+		 * nel claims more entries than the reply contains. */
+		if (ptr >= buf + size) {
+			freeconary(ary);
+			errno = EINVAL;
+			ret = -1;
+			goto out;
+		}
 		ary[i] = strdup(ptr);
 		if (!ary[i]) {
 			freeconary(ary);
@@ -79,18 +90,16 @@ int security_compute_user_raw(const char * scon,
 	ary[nel] = NULL;
 	*con = ary;
 	ret = 0;
-      out:
+out:
 	free(buf);
 	close(fd);
 	return ret;
 }
 
-
-int security_compute_user(const char * scon,
-			  const char *user, char *** con)
+int security_compute_user(const char *scon, const char *user, char ***con)
 {
 	int ret;
-	char * rscon;
+	char *rscon;
 
 	if (selinux_trans_to_raw_context(scon, &rscon))
 		return -1;
@@ -115,4 +124,3 @@ int security_compute_user(const char * scon,
 
 	return ret;
 }
-

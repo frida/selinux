@@ -1,4 +1,5 @@
 #include <unistd.h>
+#include <stdbool.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -17,24 +18,23 @@
 #include <semanage/boolean_record.h>
 #include <errno.h>
 
-int permanent = 0;
-int no_reload = 0;
-int verbose = 0;
+static bool permanent = false;
+static bool no_reload = false;
+static bool verbose = false;
 
 int setbool(char **list, size_t start, size_t end);
 
 static __attribute__((__noreturn__)) void usage(void)
 {
-	fputs
-	    ("\nUsage:  setsebool [ -NPV ] boolean value | bool1=val1 bool2=val2...\n\n",
-	     stderr);
+	fputs("\nUsage:  setsebool [ -NPV ] boolean value | bool1=val1 bool2=val2...\n\n",
+	      stderr);
 	exit(1);
 }
 
 int main(int argc, char **argv)
 {
 	size_t rc;
-	int clflag;		/* holds codes for command line flags */
+	int clflag; /* holds codes for command line flags */
 	if (argc < 2)
 		usage();
 
@@ -45,13 +45,13 @@ int main(int argc, char **argv)
 
 		switch (clflag) {
 		case 'P':
-			permanent = 1;
+			permanent = true;
 			break;
 		case 'N':
-			no_reload = 1;
+			no_reload = true;
 			break;
 		case 'V':
-			verbose = 1;
+			verbose = true;
 			break;
 		default:
 			usage();
@@ -67,7 +67,7 @@ int main(int argc, char **argv)
 	/* Check to see which way we are being called. If a '=' is passed,
 	   we'll enforce the list syntax. If not we'll enforce the original
 	   syntax for backward compatibility. */
-	if (strchr(argv[optind], '=') == 0) {
+	if (strchr(argv[optind], '=') == NULL) {
 		int len;
 		char *bool_list[1];
 
@@ -92,14 +92,12 @@ int main(int argc, char **argv)
 }
 
 /* Apply temporal boolean changes to policy via libselinux */
-static int selinux_set_boolean_list(size_t boolcnt,
-				    SELboolean * boollist)
+static int selinux_set_boolean_list(size_t boolcnt, SELboolean *boollist)
 {
-
 	if (security_set_boolean_list(boolcnt, boollist, 0)) {
 		if (errno == ENOENT)
 			fprintf(stderr, "Could not change active booleans: "
-				"Invalid boolean\n");
+					"Invalid boolean\n");
 		else if (errno) {
 			if (getuid() == 0) {
 				perror("Could not change active booleans");
@@ -115,10 +113,8 @@ static int selinux_set_boolean_list(size_t boolcnt,
 }
 
 /* Apply permanent boolean changes to policy via libsemanage */
-static int semanage_set_boolean_list(size_t boolcnt,
-				     SELboolean * boollist)
+static int semanage_set_boolean_list(size_t boolcnt, SELboolean *boollist)
 {
-
 	size_t j;
 	semanage_handle_t *handle = NULL;
 	semanage_bool_t *boolean = NULL;
@@ -161,7 +157,6 @@ static int semanage_set_boolean_list(size_t boolcnt,
 		goto err;
 
 	for (j = 0; j < boolcnt; j++) {
-
 		if (semanage_bool_create(handle, &boolean) < 0)
 			goto err;
 
@@ -178,16 +173,17 @@ static int semanage_set_boolean_list(size_t boolcnt,
 		if (!result) {
 			semanage_bool_exists_local(handle, bool_key, &result);
 			if (!result) {
-				fprintf(stderr, "Boolean %s is not defined\n", boollist[j].name);
+				fprintf(stderr, "Boolean %s is not defined\n",
+					boollist[j].name);
 				goto err;
 			}
 		}
 
-		if (semanage_bool_modify_local(handle, bool_key,
-						  boolean) < 0)
+		if (semanage_bool_modify_local(handle, bool_key, boolean) < 0)
 			goto err;
 
-		if (enabled && semanage_bool_set_active(handle, bool_key, boolean) < 0) {
+		if (enabled &&
+		    semanage_bool_set_active(handle, bool_key, boolean) < 0) {
 			fprintf(stderr, "Failed to change boolean %s: %m\n",
 				boollist[j].name);
 			goto err;
@@ -209,7 +205,7 @@ static int semanage_set_boolean_list(size_t boolcnt,
 	semanage_handle_destroy(handle);
 	return 0;
 
-      err:
+err:
 	semanage_bool_key_free(bool_key);
 	semanage_bool_free(boolean);
 	semanage_handle_destroy(handle);
@@ -249,8 +245,10 @@ int setbool(char **list, size_t start, size_t end)
 			 strcasecmp(value_ptr, "off") == 0)
 			value = 0;
 		else {
-			fprintf(stderr, "setsebool: illegal value "
-				"%s for boolean %s\n", value_ptr, name);
+			fprintf(stderr,
+				"setsebool: illegal value "
+				"%s for boolean %s\n",
+				value_ptr, name);
 			goto err;
 		}
 
@@ -298,10 +296,10 @@ int setbool(char **list, size_t start, size_t end)
 	free(vallist);
 	return 0;
 
-      omem:
+omem:
 	fprintf(stderr, "setsebool: out of memory");
 
-      err:
+err:
 	if (vallist) {
 		for (i = 0; i < boolcnt; i++)
 			free(vallist[i].name);

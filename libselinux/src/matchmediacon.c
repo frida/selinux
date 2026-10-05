@@ -11,22 +11,23 @@
 #include <regex.h>
 #include <stdarg.h>
 
-int matchmediacon(const char *media, char ** con)
+int matchmediacon(const char *media, char **con)
 {
 	const char *path = selinux_media_context_path();
 	FILE *infile;
 	char *ptr, *ptr2 = NULL;
 	int found = 0;
 	char current_line[PATH_MAX];
-	if ((infile = fopen(path, "re")) == NULL)
+	if ((infile = selinux_policy_fopen(path, "re")) == NULL)
 		return -1;
 	while (!feof_unlocked(infile)) {
-		if (!fgets_unlocked(current_line, sizeof(current_line), infile)) {
+		if (!fgets_unlocked(current_line, sizeof(current_line),
+				    infile)) {
 			fclose(infile);
 			return -1;
 		}
-		if (current_line[strlen(current_line) - 1])
-			current_line[strlen(current_line) - 1] = 0;
+		if (current_line[0] && current_line[strlen(current_line) - 1])
+			current_line[strlen(current_line) - 1] = '\0';
 		/* Skip leading whitespace before the partial context. */
 		ptr = current_line;
 		while (*ptr && isspace((unsigned char)*ptr))
